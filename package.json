@@ -1,0 +1,27 @@
+{
+  "name": "voiceos-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Production-grade real-time AI voice assistant triggered by iPhone 17 Action Button",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "start:client": "npm --workspace=apps/ios-client run start",
+    "prebuild:client": "npm --workspace=apps/ios-client run prebuild",
+    "dev:backend": "npm --workspace=apps/voice-backend run dev",
+    "agent:backend": "npm --workspace=apps/voice-backend run agent",
+    "build:backend": "npm --workspace=apps/voice-backend run build",
+    "lint": "npm --workspace=apps/voice-backend run lint"
+  },
+  "keywords": [
+    "voiceos",
+    "action-button",
+    "livekit",
+    "expo",
+    "webrtc",
+    "realtime-ai"
+  ],
+  "author": "Sarem",
+  "license": "UNLICENSED"
+}

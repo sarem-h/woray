@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "VoiceOS",
+    "slug": "voice-os",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "voiceos",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.sarem.voiceos",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "VoiceOS needs microphone access for real-time voice assistant sessions.",
+        "UIBackgroundModes": [
+          "audio",
+          "voip",
+          "fetch"
+        ]
+      }
+    },
+    "plugins": [
+      "expo-dev-client",
+      "@livekit/react-native-expo-plugin",
+      "@config-plugins/react-native-webrtc",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "17.0"
+          }
+        }
+      ],
+      [
+        "expo-app-intents",
+        {
+          "directory": "./app-intents"
+        }
+      ]
+    ],
+    "experiments": {
+      "inlineModules": {
+        "watchedDirectories": [
+          "./app-intents"
+        ]
+      }
+    }
+  }
+}

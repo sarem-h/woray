@@ -1,0 +1,37 @@
+{
+  "name": "voice-backend",
+  "version": "1.0.0",
+  "description": "Real-time AI voice assistant backend for VoiceOS Action Button integration",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "agent": "tsx watch src/agent.ts dev",
+    "start": "tsx src/server.ts",
+    "start:agent": "tsx src/agent.ts start",
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@livekit/agents": "^1.9.3",
+    "@livekit/agents-plugin-cartesia": "^1.9.3",
+    "@livekit/agents-plugin-deepgram": "^1.9.3",
+    "@livekit/agents-plugin-elevenlabs": "^1.9.3",
+    "@livekit/agents-plugin-google": "^1.9.3",
+    "@livekit/agents-plugin-openai": "^1.9.3",
+    "@livekit/agents-plugin-silero": "^1.9.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "livekit-server-sdk": "^2.15.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.4",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  },
+  "private": true
+}
