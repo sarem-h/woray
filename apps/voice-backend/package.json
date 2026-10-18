@@ -1,7 +1,7 @@
 {
   "name": "voice-backend",
   "version": "1.0.0",
-  "description": "Real-time AI voice assistant backend for VoiceOS Action Button integration",
+  "description": "Real-time AI voice assistant backend for Woray Action Button integration",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",

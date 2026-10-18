@@ -23,7 +23,7 @@ dotenv.config();
  */
 function createSTT() {
   if (process.env.DEEPGRAM_API_KEY) {
-    console.log('[VoiceOS Agent] Using Deepgram Nova-2 STT for low-latency transcription');
+    console.log('[Woray Agent] Using Deepgram Nova-2 STT for low-latency transcription');
     return new deepgram.STT({
       apiKey: process.env.DEEPGRAM_API_KEY,
       model: 'nova-2',
@@ -31,7 +31,7 @@ function createSTT() {
     });
   }
 
-  console.log('[VoiceOS Agent] Falling back to OpenAI Whisper STT');
+  console.log('[Woray Agent] Falling back to OpenAI Whisper STT');
   return new openai.STT({
     apiKey: process.env.OPENAI_API_KEY,
     language: 'en',
@@ -40,7 +40,7 @@ function createSTT() {
 
 function createLLM() {
   if (process.env.OPENAI_API_KEY) {
-    console.log('[VoiceOS Agent] Using OpenAI GPT-4o-mini LLM');
+    console.log('[Woray Agent] Using OpenAI GPT-4o-mini LLM');
     return new openai.LLM({
       apiKey: process.env.OPENAI_API_KEY,
       model: 'gpt-4o-mini',
@@ -49,7 +49,7 @@ function createLLM() {
   }
 
   if (process.env.GOOGLE_API_KEY) {
-    console.log('[VoiceOS Agent] Using Google Gemini 2.0 Flash LLM');
+    console.log('[Woray Agent] Using Google Gemini 2.0 Flash LLM');
     return new google.LLM({
       apiKey: process.env.GOOGLE_API_KEY,
       model: 'gemini-2.0-flash',
@@ -61,7 +61,7 @@ function createLLM() {
 
 function createTTS() {
   if (process.env.CARTESIA_API_KEY) {
-    console.log('[VoiceOS Agent] Using Cartesia Sonic TTS (<150ms TTFB)');
+    console.log('[Woray Agent] Using Cartesia Sonic TTS (<150ms TTFB)');
     return new cartesia.TTS({
       apiKey: process.env.CARTESIA_API_KEY,
       model: 'sonic-english',
@@ -70,14 +70,14 @@ function createTTS() {
   }
 
   if (process.env.ELEVENLABS_API_KEY) {
-    console.log('[VoiceOS Agent] Using ElevenLabs Turbo v2.5 TTS');
+    console.log('[Woray Agent] Using ElevenLabs Turbo v2.5 TTS');
     return new elevenlabs.TTS({
       apiKey: process.env.ELEVENLABS_API_KEY,
       model: 'eleven_turbo_v2_5',
     });
   }
 
-  console.log('[VoiceOS Agent] Falling back to OpenAI TTS');
+  console.log('[Woray Agent] Falling back to OpenAI TTS');
   return new openai.TTS({
     apiKey: process.env.OPENAI_API_KEY,
     model: 'tts-1',
@@ -91,20 +91,20 @@ function createTTS() {
 export default defineAgent({
   // Prewarm Silero VAD neural network on startup so first turn is zero-lag
   prewarm: async (proc: JobProcess) => {
-    console.log('[VoiceOS Agent] Prewarming Silero VAD model...');
+    console.log('[Woray Agent] Prewarming Silero VAD model...');
     proc.userData.vad = await silero.VAD.load();
-    console.log('[VoiceOS Agent] Silero VAD loaded.');
+    console.log('[Woray Agent] Silero VAD loaded.');
   },
 
   entry: async (ctx: JobContext) => {
     await ctx.connect();
-    console.log(`[VoiceOS Agent] Joined room: ${ctx.room.name}`);
+    console.log(`[Woray Agent] Joined room: ${ctx.room.name}`);
 
     const vad = ctx.proc.userData.vad as silero.VAD;
 
     // Define Assistant persona & conversational instructions
     const agent = new voice.Agent({
-      instructions: `You are VoiceOS, a fast, proactive, natural conversational voice assistant triggered by the iPhone 17 Action Button.
+      instructions: `You are Woray, a fast, proactive, natural conversational voice assistant triggered by the iPhone 17 Action Button.
 Keep spoken responses brief, natural, direct, and under 2-3 sentences.
 Do not use markdown lists, bullet points, asterisks, or formatting that sounds awkward when spoken.
 Silero Voice Activity Detection is actively monitoring user speech: if the user interrupts or starts speaking, you will yield immediately.`,
@@ -131,10 +131,10 @@ Silero Voice Activity Detection is actively monitoring user speech: if the user 
       room: ctx.room,
     });
 
-    console.log('[VoiceOS Agent] Agent session started and listening in room');
+    console.log('[Woray Agent] Agent session started and listening in room');
 
     // Announce availability
-    session.say('VoiceOS connected. What can I do for you?');
+    session.say('Woray connected. What can I do for you?');
   },
 });
 

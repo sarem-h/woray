@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "VoiceOS",
-    "slug": "voice-os",
+    "name": "Woray",
+    "slug": "woray",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
-    "scheme": "voiceos",
+    "scheme": "woray",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.sarem.voiceos",
+      "bundleIdentifier": "com.sarem.woray",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "VoiceOS needs microphone access for real-time voice assistant sessions.",
+        "NSMicrophoneUsageDescription": "Woray needs microphone access for real-time voice assistant sessions.",
         "UIBackgroundModes": [
           "audio",
           "voip",

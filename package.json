@@ -1,5 +1,5 @@
 {
-  "name": "voiceos-monorepo",
+  "name": "woray-monorepo",
   "version": "1.0.0",
   "private": true,
   "description": "Production-grade real-time AI voice assistant triggered by iPhone 17 Action Button",
@@ -15,7 +15,7 @@
     "lint": "npm --workspace=apps/voice-backend run lint"
   },
   "keywords": [
-    "voiceos",
+    "woray",
     "action-button",
     "livekit",
     "expo",

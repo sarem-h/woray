@@ -78,12 +78,12 @@ jobs:
           echo "Packaging App Bundle: $APP_PATH"
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          zip -r -y VoiceOS-DevClient.ipa Payload
+          zip -r -y Woray-DevClient.ipa Payload
 
       - name: Upload Dev-Client IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: VoiceOS-DevClient-ipa
-          path: apps/ios-client/ios/VoiceOS-DevClient.ipa
+          name: Woray-DevClient-ipa
+          path: apps/ios-client/ios/Woray-DevClient.ipa
           if-no-files-found: error
           retention-days: 14

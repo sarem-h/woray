@@ -41,7 +41,7 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
     const triggerSource = (req.body?.trigger as string) || 'unknown';
 
     console.log(
-      `[VoiceOS Backend] Token requested for room="${roomName}", identity="${participantIdentity}", trigger="${triggerSource}"`
+      `[Woray Backend] Token requested for room="${roomName}", identity="${participantIdentity}", trigger="${triggerSource}"`
     );
 
     if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
@@ -77,7 +77,7 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
       issuedAt: new Date().toISOString(),
     });
   } catch (err: any) {
-    console.error('[VoiceOS Backend] Token generation error:', err);
+    console.error('[Woray Backend] Token generation error:', err);
     res.status(500).json({
       error: 'Failed to generate LiveKit room token',
       details: err?.message,
@@ -101,7 +101,7 @@ interface ControlMessage {
 
 wss.on('connection', (ws: WebSocket, req) => {
   const clientIp = req.socket.remoteAddress;
-  console.log(`[VoiceOS Control WS] Client connected from ${clientIp}`);
+  console.log(`[Woray Control WS] Client connected from ${clientIp}`);
 
   // Send initial handshake
   ws.send(
@@ -116,12 +116,12 @@ wss.on('connection', (ws: WebSocket, req) => {
   ws.on('message', (data: Buffer | string) => {
     try {
       const msg: ControlMessage = JSON.parse(data.toString());
-      console.log(`[VoiceOS Control WS] Received message:`, msg);
+      console.log(`[Woray Control WS] Received message:`, msg);
 
       switch (msg.type) {
         case 'action_button_press':
           // Pre-warm signal received directly from iOS client
-          console.log('[VoiceOS Control WS] Action Button trigger notification received!');
+          console.log('[Woray Control WS] Action Button trigger notification received!');
           ws.send(
             JSON.stringify({
               type: 'action_button_ack',
@@ -152,22 +152,22 @@ wss.on('connection', (ws: WebSocket, req) => {
           break;
       }
     } catch (e) {
-      console.error('[VoiceOS Control WS] Invalid JSON message received:', e);
+      console.error('[Woray Control WS] Invalid JSON message received:', e);
     }
   });
 
   ws.on('close', () => {
-    console.log(`[VoiceOS Control WS] Client disconnected (${clientIp})`);
+    console.log(`[Woray Control WS] Client disconnected (${clientIp})`);
   });
 
   ws.on('error', (err) => {
-    console.error(`[VoiceOS Control WS] Socket error:`, err);
+    console.error(`[Woray Control WS] Socket error:`, err);
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log('====================================================');
-  console.log(`🚀 VoiceOS Server running on http://0.0.0.0:${PORT}`);
+  console.log(`🚀 Woray Server running on http://0.0.0.0:${PORT}`);
   console.log(`📡 WebSocket Control Channel active on ws://0.0.0.0:${PORT}/ws/control`);
   console.log(`🔑 LiveKit URL target: ${LIVEKIT_URL}`);
   console.log('====================================================');

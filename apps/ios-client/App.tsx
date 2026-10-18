@@ -245,7 +245,7 @@ function VoiceAssistantSessionView({
       <View style={styles.statusDescriptionBox}>
         <Text style={styles.statusTitle}>
           {currentVisualState === 'AgentSpeaking'
-            ? 'VoiceOS is speaking...'
+            ? 'Woray is speaking...'
             : isLocalSpeaking
             ? 'Transmitting speech...'
             : 'Listening... (Speak naturally)'}
@@ -292,7 +292,7 @@ function VoiceAssistantSessionView({
 }
 
 /**
- * Root VoiceOS Application Component.
+ * Root Woray Application Component.
  */
 export default function App() {
   const [sessionState, setSessionState] = useState<SessionState>('Idle');
@@ -312,7 +312,7 @@ export default function App() {
       await AudioSession.startAudioSession();
       await activateKeepAwakeAsync();
     } catch (e) {
-      console.warn('[VoiceOS] Failed to start native AudioSession:', e);
+      console.warn('[Woray] Failed to start native AudioSession:', e);
     }
   }, []);
 
@@ -321,7 +321,7 @@ export default function App() {
       await AudioSession.stopAudioSession();
       await deactivateKeepAwake();
     } catch (e) {
-      console.warn('[VoiceOS] Failed to stop native AudioSession:', e);
+      console.warn('[Woray] Failed to stop native AudioSession:', e);
     }
   }, []);
 
@@ -363,8 +363,8 @@ export default function App() {
 
         setSessionInfo(data);
       } catch (err: any) {
-        console.error('[VoiceOS] Connection initiation error:', err);
-        setErrorMessage(err.message || 'Failed to connect to VoiceOS backend');
+        console.error('[Woray] Connection initiation error:', err);
+        setErrorMessage(err.message || 'Failed to connect to Woray backend');
         setSessionState('Idle');
         setSessionInfo(null);
         await stopNativeAudio();
@@ -383,7 +383,7 @@ export default function App() {
     await stopNativeAudio();
   }, [stopNativeAudio]);
 
-  // Listen to Deep Linking (voiceos://start?trigger=action_button or custom URL schemes)
+  // Listen to Deep Linking (woray://start?trigger=action_button or custom URL schemes)
   const handleUrl = useCallback(
     (url: string | null) => {
       if (!url) return;
@@ -413,7 +413,7 @@ export default function App() {
       {/* Top Navigation Bar */}
       <View style={styles.navBar}>
         <View style={styles.navTitleContainer}>
-          <Text style={styles.brandTitle}>VOICE<Text style={styles.brandAccent}>OS</Text></Text>
+          <Text style={styles.brandTitle}>WO<Text style={styles.brandAccent}>RAY</Text></Text>
           <Text style={styles.brandSubtitle}>Action Button Real-Time Assistant</Text>
         </View>
 
@@ -447,7 +447,7 @@ export default function App() {
             video={false}
             onDisconnected={handleDisconnect}
             onError={(err: any) => {
-              console.error('[VoiceOS] LiveKit room error:', err);
+              console.error('[Woray] LiveKit room error:', err);
               setErrorMessage(err?.message || 'LiveKit room error');
               handleDisconnect();
             }}
