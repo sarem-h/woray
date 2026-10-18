@@ -16,7 +16,6 @@ import {
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { useAppIntents, removePendingInvocationAsync } from 'expo-app-intents';
 import {
   LiveKitRoom,
   AudioSession,
@@ -384,39 +383,28 @@ export default function App() {
     await stopNativeAudio();
   }, [stopNativeAudio]);
 
-  // 1. Listen to Native App Intents (iPhone 17 Action Button)
-  useAppIntents(async (pendingIntents) => {
-    if (!pendingIntents || pendingIntents.length === 0) return;
-
-    for (const invocation of pendingIntents) {
-      if (
-        invocation.name === 'startVoiceSession' ||
-        invocation.name === 'StartVoiceSessionIntent'
-      ) {
-        await initiateSession('action_button');
-      }
-      try {
-        await removePendingInvocationAsync(invocation.id);
-      } catch (e) {
-        console.warn('[VoiceOS] removePendingInvocationAsync warning:', e);
-      }
-    }
-  });
-
-  // 2. Listen to Deep Linking (voiceos://start or custom URL schemes)
-  useEffect(() => {
-    if (initialUrl && initialUrl.includes('start')) {
-      initiateSession('deep_link');
-    }
-
-    const sub = Linking.addEventListener('url', (event) => {
-      if (event.url && event.url.includes('start')) {
+  // Listen to Deep Linking (voiceos://start?trigger=action_button or custom URL schemes)
+  const handleUrl = useCallback(
+    (url: string | null) => {
+      if (!url) return;
+      if (url.includes('trigger=action_button')) {
+        initiateSession('action_button');
+      } else if (url.includes('start')) {
         initiateSession('deep_link');
       }
+    },
+    [initiateSession]
+  );
+
+  useEffect(() => {
+    handleUrl(initialUrl);
+
+    const sub = Linking.addEventListener('url', (event) => {
+      handleUrl(event.url);
     });
 
     return () => sub.remove();
-  }, [initialUrl, initiateSession]);
+  }, [initialUrl, handleUrl]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -458,9 +446,9 @@ export default function App() {
             audio={true}
             video={false}
             onDisconnected={handleDisconnect}
-            onError={(err) => {
+            onError={(err: any) => {
               console.error('[VoiceOS] LiveKit room error:', err);
-              setErrorMessage(err.message);
+              setErrorMessage(err?.message || 'LiveKit room error');
               handleDisconnect();
             }}
             options={{

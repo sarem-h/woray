@@ -21,7 +21,6 @@
     "plugins": [
       "expo-dev-client",
       "@livekit/react-native-expo-plugin",
-      "@config-plugins/react-native-webrtc",
       [
         "expo-build-properties",
         {
@@ -30,19 +29,7 @@
           }
         }
       ],
-      [
-        "expo-app-intents",
-        {
-          "directory": "./app-intents"
-        }
-      ]
-    ],
-    "experiments": {
-      "inlineModules": {
-        "watchedDirectories": [
-          "./app-intents"
-        ]
-      }
-    }
+      "./plugins/withActionButtonIntent.js"
+    ]
   }
 }

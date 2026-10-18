@@ -31,6 +31,14 @@ jobs:
         run: |
           npx expo prebuild --platform ios --clean
 
+      - name: Resolve CocoaPods Spec Sources
+        working-directory: apps/ios-client/ios
+        run: |
+          # Strip duplicate livekit/podspecs source from Podfile so only trunk is used
+          sed -i '' '/github\.com\/livekit\/podspecs/d' Podfile 2>/dev/null || sed -i '/github\.com\/livekit\/podspecs/d' Podfile 2>/dev/null || true
+          rm -rf ~/.cocoapods/repos/livekit-podspecs 2>/dev/null || true
+          pod repo remove livekit-podspecs 2>/dev/null || true
+
       - name: Install CocoaPods
         working-directory: apps/ios-client/ios
         run: |
