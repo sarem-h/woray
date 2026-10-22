@@ -7,6 +7,7 @@ import {
   cli,
   defineAgent,
   voice,
+  llm,
 } from '@livekit/agents';
 import * as silero from '@livekit/agents-plugin-silero';
 import * as deepgram from '@livekit/agents-plugin-deepgram';
@@ -86,6 +87,37 @@ function createTTS() {
 }
 
 /**
+ * Built-in Tools for Woray Agent
+ */
+const getCurrentTimeTool = llm.tool({
+  name: 'get_current_time',
+  description: 'Returns the current local date, time, and timezone of the system.',
+  execute: async () => {
+    const now = new Date();
+    return {
+      iso: now.toISOString(),
+      formatted: now.toLocaleString(),
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+  },
+});
+
+const getSystemStatusTool = llm.tool({
+  name: 'get_system_status',
+  description: 'Returns the health, uptime, and operational diagnostics of the Woray assistant.',
+  execute: async () => {
+    return {
+      status: 'operational',
+      uptimeSeconds: Math.floor(process.uptime()),
+      platform: process.platform,
+      nodeVersion: process.version,
+      memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+      bedrockAvailable: Boolean(process.env.AWS_BEARER_TOKEN_BEDROCK),
+    };
+  },
+});
+
+/**
  * LiveKit Agent Worker Definition
  */
 export default defineAgent({
@@ -102,12 +134,14 @@ export default defineAgent({
 
     const vad = ctx.proc.userData.vad as silero.VAD;
 
-    // Define Assistant persona & conversational instructions
+    // Define Assistant persona & conversational instructions with functional tools
     const agent = new voice.Agent({
       instructions: `You are Woray, a fast, proactive, natural conversational voice assistant triggered by the iPhone 17 Action Button.
 Keep spoken responses brief, natural, direct, and under 2-3 sentences.
 Do not use markdown lists, bullet points, asterisks, or formatting that sounds awkward when spoken.
-Silero Voice Activity Detection is actively monitoring user speech: if the user interrupts or starts speaking, you will yield immediately.`,
+Silero Voice Activity Detection is actively monitoring user speech: if the user interrupts or starts speaking, you will yield immediately.
+You have access to tools: get_current_time for checking current time or date, and get_system_status for reporting assistant health and status.`,
+      tools: [getCurrentTimeTool, getSystemStatusTool],
     });
 
     // Assemble turn-taking pipeline with barge-in interruption enabled

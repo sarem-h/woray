@@ -12,6 +12,7 @@ import {
   Easing,
   Platform,
   ActivityIndicator,
+  Settings,
 } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
@@ -24,7 +25,13 @@ import {
   useRoomContext,
   useConnectionState,
 } from '@livekit/react-native';
-import { ConnectionState } from 'livekit-client';
+import {
+  ConnectionState,
+  RoomEvent,
+  type TranscriptionSegment,
+  type Participant,
+} from 'livekit-client';
+import runtimeConfig from './runtime-config.json';
 
 export type SessionState = 'Idle' | 'Connecting' | 'Listening' | 'AgentSpeaking';
 export type TriggerSource = 'action_button' | 'deep_link' | 'manual';
@@ -36,8 +43,27 @@ interface SessionTokenResponse {
   identity?: string;
 }
 
-// Default fallback host - customize via in-app settings modal
-const DEFAULT_BACKEND_HOST = 'http://localhost:3001';
+/**
+ * Resolves the initial backend host prioritizing:
+ * 1. Active Cloudflare tunnel URL in runtime-config.json (bypasses enterprise Wi-Fi blocks)
+ * 2. Saved host in iOS Settings (persisted across restarts)
+ * 3. Default fallback in runtime-config or localhost:3001
+ */
+function resolveInitialBackendHost(): string {
+  const runtimeHost = (runtimeConfig?.backendHost || '').trim();
+  if (runtimeHost.includes('.trycloudflare.com')) {
+    return runtimeHost;
+  }
+  if (Platform.OS === 'ios') {
+    const saved = Settings.get('woray_backend_host');
+    if (typeof saved === 'string' && saved.trim().length > 0) {
+      return saved.trim();
+    }
+  }
+  return runtimeHost || 'http://localhost:3001';
+}
+
+const DEFAULT_BACKEND_HOST = resolveInitialBackendHost();
 
 /**
  * VoiceAssistantSessionView: Active LiveKit Room inner component.
@@ -59,8 +85,34 @@ function VoiceAssistantSessionView({
   const voiceAssistant = useVoiceAssistant();
 
   const [sessionSeconds, setSessionSeconds] = useState(0);
+  const [userTranscript, setUserTranscript] = useState<string>('');
+  const [agentTranscript, setAgentTranscript] = useState<string>('');
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const glowAnim = useRef(new Animated.Value(0.4)).current;
+
+  // Real-time live speech & agent transcription listener
+  useEffect(() => {
+    if (!room) return;
+
+    const handleTranscription = (
+      segments: TranscriptionSegment[],
+      participant?: Participant
+    ) => {
+      const text = segments.map((s) => s.text).join(' ').trim();
+      if (!text) return;
+
+      if (participant?.isLocal) {
+        setUserTranscript(text);
+      } else {
+        setAgentTranscript(text);
+      }
+    };
+
+    room.on(RoomEvent.TranscriptionReceived, handleTranscription);
+    return () => {
+      room.off(RoomEvent.TranscriptionReceived, handleTranscription);
+    };
+  }, [room]);
 
   // Determine active visual state
   const isAgentSpeaking =
@@ -257,6 +309,43 @@ function VoiceAssistantSessionView({
         </Text>
       </View>
 
+      {/* Sleek Translucent Glassmorphic Live Caption Card */}
+      <View style={styles.captionCard}>
+        <View style={styles.captionSpeakerSection}>
+          <View style={styles.captionHeaderRow}>
+            <View style={[styles.speakerDot, styles.speakerUserDot]} />
+            <Text style={styles.captionSpeakerTag}>You</Text>
+          </View>
+          <Text
+            style={[
+              styles.captionText,
+              !userTranscript && styles.captionPlaceholder,
+            ]}
+            numberOfLines={2}
+          >
+            {userTranscript || (isLocalSpeaking ? 'Transcribing speech...' : 'Listening...')}
+          </Text>
+        </View>
+
+        <View style={styles.captionDivider} />
+
+        <View style={styles.captionSpeakerSection}>
+          <View style={styles.captionHeaderRow}>
+            <View style={[styles.speakerDot, styles.speakerAgentDot]} />
+            <Text style={styles.captionSpeakerTag}>Woray</Text>
+          </View>
+          <Text
+            style={[
+              styles.captionText,
+              !agentTranscript && styles.captionPlaceholder,
+            ]}
+            numberOfLines={3}
+          >
+            {agentTranscript || (isAgentSpeaking ? 'Woray responding...' : 'Ready')}
+          </Text>
+        </View>
+      </View>
+
       {/* In-Session Action Bar */}
       <View style={styles.sessionControls}>
         <TouchableOpacity
@@ -305,6 +394,65 @@ export default function App() {
 
   const initialUrl = Linking.useURL();
   const isStartingRef = useRef(false);
+  const controlWsRef = useRef<WebSocket | null>(null);
+
+  // Maintain lightweight WebSocket connection to /ws/control for pre-warming & telemetry
+  useEffect(() => {
+    if (!backendHost) return;
+
+    let ws: WebSocket | null = null;
+    let isCancelled = false;
+
+    try {
+      const wsUrl =
+        backendHost
+          .replace(/^http:\/\//i, 'ws://')
+          .replace(/^https:\/\//i, 'wss://')
+          .replace(/\/$/, '') + '/ws/control';
+
+      console.log('[Woray Client] Connecting to control WebSocket:', wsUrl);
+      ws = new WebSocket(wsUrl);
+      controlWsRef.current = ws;
+
+      ws.onopen = () => {
+        if (!isCancelled) {
+          console.log('[Woray Client] Control WebSocket connected');
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('[Woray Client] Control message:', data);
+        } catch {
+          // ignore
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.warn('[Woray Client] Control WebSocket notice:', err);
+      };
+
+      ws.onclose = () => {
+        if (!isCancelled) {
+          console.log('[Woray Client] Control WebSocket closed');
+        }
+      };
+    } catch (e) {
+      console.warn('[Woray Client] Failed to initialize control WebSocket:', e);
+    }
+
+    return () => {
+      isCancelled = true;
+      if (ws) {
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, [backendHost]);
 
   // Manage Native Audio Session and Screen Keep Awake during active call
   const startNativeAudio = useCallback(async () => {
@@ -325,7 +473,7 @@ export default function App() {
     }
   }, []);
 
-  // Fetch token and initiate LiveKit WebRTC connection
+  // Fetch token and initiate LiveKit WebRTC connection with dynamic room isolation
   const initiateSession = useCallback(
     async (source: TriggerSource) => {
       if (isStartingRef.current) return;
@@ -333,6 +481,25 @@ export default function App() {
       setErrorMessage(null);
       setTriggerSource(source);
       setSessionState('Connecting');
+
+      // Unique session room ID on every call so consecutive calls never collide
+      const dynamicRoom = `woray-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+
+      // Send action_button_press pre-warm notification to control WebSocket if open
+      try {
+        if (controlWsRef.current && controlWsRef.current.readyState === WebSocket.OPEN) {
+          controlWsRef.current.send(
+            JSON.stringify({
+              type: 'action_button_press',
+              timestamp: Date.now(),
+              room: dynamicRoom,
+              trigger: source,
+            })
+          );
+        }
+      } catch (wsErr) {
+        console.warn('[Woray] Non-fatal control WS send notice:', wsErr);
+      }
 
       try {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
@@ -345,8 +512,8 @@ export default function App() {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            room: 'action-button-room',
-            identity: 'iphone-17-client',
+            room: dynamicRoom,
+            identity: 'auto',
             trigger: source,
           }),
         });
@@ -544,7 +711,11 @@ export default function App() {
               <TouchableOpacity
                 style={styles.modalSaveButton}
                 onPress={() => {
-                  setBackendHost(hostInput.trim());
+                  const cleaned = hostInput.trim();
+                  setBackendHost(cleaned);
+                  if (Platform.OS === 'ios') {
+                    Settings.set({ woray_backend_host: cleaned });
+                  }
                   setSettingsModalVisible(false);
                 }}
               >
@@ -849,6 +1020,62 @@ const styles = StyleSheet.create({
     color: '#71717a',
     textAlign: 'center',
     lineHeight: 18,
+  },
+  /* Sleek Glassmorphic Live Caption Card */
+  captionCard: {
+    width: '100%',
+    backgroundColor: 'rgba(24, 24, 27, 0.75)',
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    marginVertical: 12,
+  },
+  captionSpeakerSection: {
+    marginVertical: 2,
+  },
+  captionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 3,
+  },
+  speakerDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginRight: 6,
+  },
+  speakerUserDot: {
+    backgroundColor: '#34d399',
+  },
+  speakerAgentDot: {
+    backgroundColor: '#c084fc',
+  },
+  captionSpeakerTag: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#a1a1aa',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
+  captionText: {
+    fontSize: 13,
+    color: '#f4f4f5',
+    lineHeight: 18,
+    fontWeight: '400',
+  },
+  captionPlaceholder: {
+    color: '#52525b',
+    fontStyle: 'italic',
+  },
+  captionDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    marginVertical: 8,
   },
   sessionControls: {
     flexDirection: 'row',

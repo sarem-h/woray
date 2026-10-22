@@ -30,15 +30,24 @@ app.get('/health', (_req: Request, res: Response) => {
 /**
  * POST /api/session/token
  * Generates an authorized LiveKit AccessToken for real-time voice streaming.
- * Default room: "action-button-room"
- * Default participant: "iphone-17-client"
+ * Supports dynamic room and identity isolation when omitted or set to 'auto'.
  */
 app.post('/api/session/token', async (req: Request, res: Response): Promise<void> => {
   try {
-    const roomName = (req.body?.room as string) || 'action-button-room';
-    const participantIdentity =
-      (req.body?.identity as string) || 'iphone-17-client';
+    const rawRoom = (req.body?.room as string)?.trim();
+    const rawIdentity = (req.body?.identity as string)?.trim();
     const triggerSource = (req.body?.trigger as string) || 'unknown';
+
+    // Dynamic isolation: if omitted, empty, or 'auto', generate unique IDs
+    const roomName =
+      !rawRoom || rawRoom === 'auto'
+        ? `woray-session-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+        : rawRoom;
+
+    const participantIdentity =
+      !rawIdentity || rawIdentity === 'auto'
+        ? `iphone-17-${Math.random().toString(36).slice(2, 6)}`
+        : rawIdentity;
 
     console.log(
       `[Woray Backend] Token requested for room="${roomName}", identity="${participantIdentity}", trigger="${triggerSource}"`
@@ -121,12 +130,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       switch (msg.type) {
         case 'action_button_press':
           // Pre-warm signal received directly from iOS client
-          console.log('[Woray Control WS] Action Button trigger notification received!');
+          console.log('[Woray Control WS] Action Button trigger notification received!', msg.payload);
           ws.send(
             JSON.stringify({
               type: 'action_button_ack',
               timestamp: Date.now(),
-              room: 'action-button-room',
+              room: msg.payload?.room || 'dynamic',
             })
           );
           break;
