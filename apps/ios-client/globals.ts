@@ -11,6 +11,35 @@
 
 /* eslint-disable no-bitwise */
 
+// ----------------------------------------------------------------------------
+// WeakRef & FinalizationRegistry polyfills for Hermes (React Native 0.76)
+//
+// LiveKit client relies on ES2021 WeakRef and FinalizationRegistry.
+// Hermes on React Native 0.76 does not implement them.
+// Note: This WeakRef shim holds strong references (dev-only acceptable; leaks at scale).
+// ----------------------------------------------------------------------------
+if (typeof (globalThis as any).WeakRef === 'undefined') {
+  (globalThis as any).WeakRef = class WeakRef<T extends object = object> {
+    private readonly target: T;
+    constructor(target: T) {
+      this.target = target;
+    }
+    deref(): T | undefined {
+      return this.target;
+    }
+  };
+}
+
+if (typeof (globalThis as any).FinalizationRegistry === 'undefined') {
+  (globalThis as any).FinalizationRegistry = class FinalizationRegistry<T = any> {
+    constructor(_cleanupCallback: (heldValue: T) => void) {}
+    register(_target: object, _heldValue: T, _unregisterToken?: object): void {}
+    unregister(_unregisterToken: object): boolean {
+      return false;
+    }
+  };
+}
+
 // Unicode replacement character used for malformed UTF-8 sequences
 const REPLACEMENT_CHAR = String.fromCharCode(0xfffd);
 
@@ -184,4 +213,3 @@ if (typeof g.TextDecoder === 'undefined') {
 const { registerGlobals } = require('@livekit/react-native');
 
 registerGlobals();
-
