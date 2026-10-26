@@ -1,5 +1,11 @@
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config();
 import {
   type JobContext,
   type JobProcess,
@@ -10,81 +16,14 @@ import {
   llm,
 } from '@livekit/agents';
 import * as silero from '@livekit/agents-plugin-silero';
-import * as deepgram from '@livekit/agents-plugin-deepgram';
-import * as openai from '@livekit/agents-plugin-openai';
-import * as cartesia from '@livekit/agents-plugin-cartesia';
-import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
-import * as google from '@livekit/agents-plugin-google';
+import {
+  createSTT,
+  createLLM,
+  createTTS,
+  logActivePipelineSummary,
+} from './providers/registry.js';
 
 dotenv.config();
-
-/**
- * Modular Provider Factories
- * Pluggable STT (Deepgram / Whisper), LLM (OpenAI / Gemini), and TTS (Cartesia / ElevenLabs / OpenAI)
- */
-function createSTT() {
-  if (process.env.DEEPGRAM_API_KEY) {
-    console.log('[Woray Agent] Using Deepgram Nova-2 STT for low-latency transcription');
-    return new deepgram.STT({
-      apiKey: process.env.DEEPGRAM_API_KEY,
-      model: 'nova-2',
-      language: 'en',
-    });
-  }
-
-  console.log('[Woray Agent] Falling back to OpenAI Whisper STT');
-  return new openai.STT({
-    apiKey: process.env.OPENAI_API_KEY,
-    language: 'en',
-  });
-}
-
-function createLLM() {
-  if (process.env.OPENAI_API_KEY) {
-    console.log('[Woray Agent] Using OpenAI GPT-4o-mini LLM');
-    return new openai.LLM({
-      apiKey: process.env.OPENAI_API_KEY,
-      model: 'gpt-4o-mini',
-      temperature: 0.7,
-    });
-  }
-
-  if (process.env.GOOGLE_API_KEY) {
-    console.log('[Woray Agent] Using Google Gemini 2.0 Flash LLM');
-    return new google.LLM({
-      apiKey: process.env.GOOGLE_API_KEY,
-      model: 'gemini-2.0-flash',
-    });
-  }
-
-  throw new Error('No LLM API key configured (specify OPENAI_API_KEY or GOOGLE_API_KEY)');
-}
-
-function createTTS() {
-  if (process.env.CARTESIA_API_KEY) {
-    console.log('[Woray Agent] Using Cartesia Sonic TTS (<150ms TTFB)');
-    return new cartesia.TTS({
-      apiKey: process.env.CARTESIA_API_KEY,
-      model: 'sonic-english',
-      voice: '79a125e8-cd45-4c13-8a67-188112f4dd22', // Conversational natural voice
-    });
-  }
-
-  if (process.env.ELEVENLABS_API_KEY) {
-    console.log('[Woray Agent] Using ElevenLabs Turbo v2.5 TTS');
-    return new elevenlabs.TTS({
-      apiKey: process.env.ELEVENLABS_API_KEY,
-      model: 'eleven_turbo_v2_5',
-    });
-  }
-
-  console.log('[Woray Agent] Falling back to OpenAI TTS');
-  return new openai.TTS({
-    apiKey: process.env.OPENAI_API_KEY,
-    model: 'tts-1',
-    voice: 'alloy',
-  });
-}
 
 /**
  * Built-in Tools for Woray Agent
@@ -123,6 +62,7 @@ const getSystemStatusTool = llm.tool({
 export default defineAgent({
   // Prewarm Silero VAD neural network on startup so first turn is zero-lag
   prewarm: async (proc: JobProcess) => {
+    logActivePipelineSummary();
     console.log('[Woray Agent] Prewarming Silero VAD model...');
     proc.userData.vad = await silero.VAD.load();
     console.log('[Woray Agent] Silero VAD loaded.');
@@ -167,8 +107,8 @@ You have access to tools: get_current_time for checking current time or date, an
 
     console.log('[Woray Agent] Agent session started and listening in room');
 
-    // Announce availability
-    session.say('Woray connected. What can I do for you?');
+    // Announce availability immediately upon connection
+    session.say('Woray online. Go ahead.', { allowInterruptions: true });
   },
 });
 

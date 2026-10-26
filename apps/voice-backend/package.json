@@ -9,7 +9,8 @@
     "start": "tsx src/server.ts",
     "start:agent": "tsx src/agent.ts start",
     "build": "tsc",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test:providers": "tsx src/smoke-test.ts"
   },
   "dependencies": {
     "@livekit/agents": "^1.9.3",

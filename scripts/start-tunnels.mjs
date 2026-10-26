@@ -9,6 +9,7 @@ const rootDir = path.resolve(__dirname, '..');
 const runtimeConfigPath = path.resolve(rootDir, 'apps', 'ios-client', 'runtime-config.json');
 
 let backendProc = null;
+let agentProc = null;
 let tunnel3001Proc = null;
 let tunnel8081Proc = null;
 let expoProc = null;
@@ -24,7 +25,7 @@ function cleanup() {
 
   console.log('\n[Woray] Shutting down all processes...');
 
-  const procs = [backendProc, tunnel3001Proc, tunnel8081Proc, expoProc];
+  const procs = [backendProc, agentProc, tunnel3001Proc, tunnel8081Proc, expoProc];
   for (const p of procs) {
     if (p && p.pid) {
       try {
@@ -167,6 +168,36 @@ async function main() {
 
   backendProc.on('error', (err) => {
     console.error('[Backend] Process spawn error:', err);
+  });
+
+  // Step 1B: Spawn LiveKit Agent Worker in background
+  console.log('[Agent] Spawning LiveKit Agent Worker (npx tsx src/agent.ts dev)...');
+  agentProc = spawn('npx', ['tsx', 'src/agent.ts', 'dev'], {
+    cwd: path.resolve(rootDir, 'apps', 'voice-backend'),
+    shell: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  agentProc.stdout.on('data', (chunk) => {
+    if (!expoStarted) {
+      const lines = chunk.toString().trim().split('\n');
+      for (const line of lines) {
+        if (line.trim()) {
+          console.log(`[Agent] ${line.trim()}`);
+        }
+      }
+    }
+  });
+
+  agentProc.stderr.on('data', (chunk) => {
+    const text = chunk.toString();
+    if (!expoStarted || text.toLowerCase().includes('error')) {
+      console.error(`[Agent Error] ${text.trim()}`);
+    }
+  });
+
+  agentProc.on('error', (err) => {
+    console.error('[Agent] Process spawn error:', err);
   });
 
   try {
