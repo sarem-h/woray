@@ -13,6 +13,8 @@ import {
   Platform,
   ActivityIndicator,
   Settings,
+  AppState,
+  type AppStateStatus,
 } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as Haptics from 'expo-haptics';
@@ -392,6 +394,14 @@ export default function App() {
   const [hostInput, setHostInput] = useState<string>(DEFAULT_BACKEND_HOST);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  // Action Button Invocation HUD Telemetry & State
+  const [handoffLatency, setHandoffLatency] = useState<number | null>(null);
+  const [hudVisible, setHudVisible] = useState(false);
+  const [hudCollapsed, setHudCollapsed] = useState(false);
+  const [pipelineStep, setPipelineStep] = useState(1);
+  const hudSlideAnim = useRef(new Animated.Value(-140)).current;
+  const lastConsumedTsRef = useRef<number>(0);
+
   const initialUrl = Linking.useURL();
   const isStartingRef = useRef(false);
   const controlWsRef = useRef<WebSocket | null>(null);
@@ -473,14 +483,25 @@ export default function App() {
     }
   }, []);
 
-  // Fetch token and initiate LiveKit WebRTC connection with dynamic room isolation
+  // Fetch token and initiate LiveKit WebRTC connection with dynamic room isolation & latency telemetry
   const initiateSession = useCallback(
-    async (source: TriggerSource) => {
+    async (source: TriggerSource, handoffLatencyMs?: number) => {
       if (isStartingRef.current) return;
       isStartingRef.current = true;
       setErrorMessage(null);
       setTriggerSource(source);
       setSessionState('Connecting');
+      setHandoffLatency(handoffLatencyMs ?? null);
+      setPipelineStep(1); // 1: Hardware Intent / User Invocation Captured
+      setHudVisible(true);
+      setHudCollapsed(false);
+
+      Animated.spring(hudSlideAnim, {
+        toValue: 0,
+        friction: 8,
+        tension: 50,
+        useNativeDriver: true,
+      }).start();
 
       // Unique session room ID on every call so consecutive calls never collide
       const dynamicRoom = `woray-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
@@ -494,6 +515,7 @@ export default function App() {
               timestamp: Date.now(),
               room: dynamicRoom,
               trigger: source,
+              handoffLatencyMs: handoffLatencyMs ?? null,
             })
           );
         }
@@ -504,7 +526,9 @@ export default function App() {
       try {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         await startNativeAudio();
+        setPipelineStep(2); // 2: AudioSession & AEC Armed
 
+        setPipelineStep(3); // 3: Joining WebRTC Room...
         const endpoint = `${backendHost.replace(/\/$/, '')}/api/session/token`;
         const res = await fetch(endpoint, {
           method: 'POST',
@@ -540,8 +564,68 @@ export default function App() {
         isStartingRef.current = false;
       }
     },
-    [backendHost, startNativeAudio, stopNativeAudio]
+    [backendHost, startNativeAudio, stopNativeAudio, hudSlideAnim]
   );
+
+  // Monitor session state for HUD card auto-collapse & dismiss
+  useEffect(() => {
+    if (sessionState === 'Listening' || sessionState === 'AgentSpeaking') {
+      setPipelineStep(4); // 4: LiveKit 48kHz Stream Active
+      const timer = setTimeout(() => {
+        setHudCollapsed(true);
+      }, 1500);
+      return () => clearTimeout(timer);
+    } else if (sessionState === 'Idle') {
+      setHudCollapsed(false);
+      Animated.timing(hudSlideAnim, {
+        toValue: -140,
+        duration: 250,
+        useNativeDriver: true,
+      }).start(() => setHudVisible(false));
+    }
+  }, [sessionState, hudSlideAnim]);
+
+  // Deterministic Native Trigger Detection via NSUserDefaults / Settings API
+  const checkNativeActionButtonTrigger = useCallback(() => {
+    if (Platform.OS !== 'ios') return;
+    try {
+      const rawTs = Number(Settings.get('woray_action_button_timestamp')) || 0;
+      const nowSec = Date.now() / 1000;
+      if (rawTs > 0 && rawTs !== lastConsumedTsRef.current && nowSec - rawTs < 20) {
+        lastConsumedTsRef.current = rawTs;
+        Settings.set({ woray_action_button_timestamp: 0 });
+        const handoffLatencyMs = Math.max(1, Math.round((nowSec - rawTs) * 1000));
+        console.log(
+          `[Woray Native] Action Button hardware trigger detected! Handoff latency: ${handoffLatencyMs}ms`
+        );
+        initiateSession('action_button', handoffLatencyMs);
+      }
+    } catch (e) {
+      console.warn('[Woray Native] Error checking action button timestamp:', e);
+    }
+  }, [initiateSession]);
+
+  useEffect(() => {
+    // Check on mount
+    checkNativeActionButtonTrigger();
+
+    // Check when AppState transitions to 'active'
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        checkNativeActionButtonTrigger();
+        const t1 = setTimeout(checkNativeActionButtonTrigger, 150);
+        const t2 = setTimeout(checkNativeActionButtonTrigger, 400);
+        return () => {
+          clearTimeout(t1);
+          clearTimeout(t2);
+        };
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [checkNativeActionButtonTrigger]);
 
   // Disconnect session
   const handleDisconnect = useCallback(async () => {
@@ -576,6 +660,99 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#09090b" />
+
+      {/* Action Button Invocation HUD Card */}
+      {hudVisible && (
+        <Animated.View
+          style={[
+            styles.hudContainer,
+            { transform: [{ translateY: hudSlideAnim }] },
+          ]}
+        >
+          {hudCollapsed ? (
+            <TouchableOpacity
+              style={styles.hudCollapsedPill}
+              onPress={() => setHudCollapsed(false)}
+              activeOpacity={0.8}
+            >
+              <View style={styles.hudGlowDot} />
+              <Text style={styles.hudCollapsedText}>
+                {triggerSource === 'action_button' ? '⚡ Action Button' : '⚡ Woray'} • 48kHz Active
+                {handoffLatency !== null ? ` • ${handoffLatency}ms` : ''}
+              </Text>
+              <Text style={styles.hudChevron}>▾</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.hudExpandedCard}
+              onPress={() => setHudCollapsed(true)}
+              activeOpacity={0.95}
+            >
+              <View style={styles.hudHeaderRow}>
+                <View style={styles.hudBadgeContainer}>
+                  <Text style={styles.hudBadgeText}>
+                    {triggerSource === 'action_button'
+                      ? '⚡ ACTION BUTTON INVOKED'
+                      : triggerSource === 'deep_link'
+                      ? '🔗 DEEP LINK INVOKED'
+                      : '👆 MANUAL INVOCATION'}
+                  </Text>
+                </View>
+
+                {handoffLatency !== null && (
+                  <View style={styles.hudLatencyBadge}>
+                    <Text style={styles.hudLatencyText}>Handoff: {handoffLatency}ms</Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.hudTelemetryList}>
+                {/* Step 1 */}
+                <View style={styles.telemetryItem}>
+                  <Text style={styles.telemetryIconDone}>✓</Text>
+                  <Text style={styles.telemetryTextDone}>Hardware Intent Captured</Text>
+                </View>
+
+                {/* Step 2 */}
+                <View style={styles.telemetryItem}>
+                  {pipelineStep >= 2 ? (
+                    <Text style={styles.telemetryIconDone}>✓</Text>
+                  ) : (
+                    <ActivityIndicator size="small" color="#f59e0b" style={styles.telemetrySpinner} />
+                  )}
+                  <Text
+                    style={
+                      pipelineStep >= 2 ? styles.telemetryTextDone : styles.telemetryTextPending
+                    }
+                  >
+                    AudioSession & AEC Armed
+                  </Text>
+                </View>
+
+                {/* Step 3 & 4 */}
+                <View style={styles.telemetryItem}>
+                  {pipelineStep >= 4 ? (
+                    <Text style={styles.telemetryIconDone}>✓</Text>
+                  ) : pipelineStep >= 3 ? (
+                    <ActivityIndicator size="small" color="#06b6d4" style={styles.telemetrySpinner} />
+                  ) : (
+                    <Text style={styles.telemetryIconIdle}>○</Text>
+                  )}
+                  <Text
+                    style={
+                      pipelineStep >= 4 ? styles.telemetryTextDone : styles.telemetryTextPending
+                    }
+                  >
+                    {pipelineStep >= 4
+                      ? 'LiveKit 48kHz Stream Active'
+                      : 'Joining WebRTC Room...'}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          )}
+        </Animated.View>
+      )}
 
       {/* Top Navigation Bar */}
       <View style={styles.navBar}>
@@ -1192,5 +1369,128 @@ const styles = StyleSheet.create({
     color: '#09090b',
     fontSize: 14,
     fontWeight: '700',
+  },
+  /* Action Button Invocation HUD Card */
+  hudContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 56 : 16,
+    left: 16,
+    right: 16,
+    zIndex: 9999,
+    alignItems: 'center',
+  },
+  hudCollapsedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(20, 20, 24, 0.94)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.45)',
+    shadowColor: '#06b6d4',
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  hudGlowDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10b981',
+    marginRight: 8,
+    shadowColor: '#10b981',
+    shadowOpacity: 0.8,
+    shadowRadius: 5,
+  },
+  hudCollapsedText: {
+    color: '#f4f4f5',
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    letterSpacing: 0.2,
+  },
+  hudChevron: {
+    color: '#71717a',
+    fontSize: 12,
+    marginLeft: 8,
+  },
+  hudExpandedCard: {
+    width: '100%',
+    backgroundColor: 'rgba(20, 20, 24, 0.96)',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.35)',
+    shadowColor: '#000',
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  hudHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  hudBadgeContainer: {
+    backgroundColor: 'rgba(6, 182, 212, 0.15)',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.4)',
+  },
+  hudBadgeText: {
+    color: '#22d3ee',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  hudLatencyBadge: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.4)',
+  },
+  hudLatencyText: {
+    color: '#34d399',
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  hudTelemetryList: {
+    gap: 8,
+  },
+  telemetryItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  telemetryIconDone: {
+    color: '#10b981',
+    fontSize: 14,
+    fontWeight: '800',
+    width: 22,
+  },
+  telemetryIconIdle: {
+    color: '#52525b',
+    fontSize: 14,
+    width: 22,
+  },
+  telemetrySpinner: {
+    width: 22,
+    marginRight: 2,
+  },
+  telemetryTextDone: {
+    color: '#f4f4f5',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  telemetryTextPending: {
+    color: '#a1a1aa',
+    fontSize: 13,
+    fontWeight: '400',
   },
 });

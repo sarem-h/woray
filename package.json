@@ -25,5 +25,8 @@
     "realtime-ai"
   ],
   "author": "Sarem",
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/react": "~18.3.12"
+  }
 }
