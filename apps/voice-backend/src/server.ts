@@ -3,7 +3,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
-import { AccessToken } from 'livekit-server-sdk';
+import { AccessToken, RoomConfiguration, RoomAgentDispatch } from 'livekit-server-sdk';
 
 dotenv.config();
 
@@ -73,6 +73,10 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
       canPublish: true,
       canSubscribe: true,
       canPublishData: true,
+    });
+
+    at.roomConfig = new RoomConfiguration({
+      agents: [new RoomAgentDispatch({ agentName: process.env.LIVEKIT_AGENT_NAME ?? 'woray-agent' })],
     });
 
     const token = await at.toJwt();
