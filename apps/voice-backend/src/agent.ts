@@ -88,10 +88,11 @@ export default defineAgent({
   },
 
   entry: async (ctx: JobContext) => {
-    console.log('[AgentJob] >>> RECEIVED JOB! Joining room:', ctx.room.name);
     const job: any = (ctx as any).job;
+    const roomName = job?.room?.name ?? (ctx as any).room?.name ?? 'unknown';
+    console.log('[AgentJob] >>> RECEIVED JOB! Joining room:', roomName);
     console.log(
-      `[AgentJob] received job request. jobId="${job?.id ?? 'unknown'}" room="${job?.room?.name ?? ctx.room?.name ?? 'unknown'}" agentName="${job?.agentName ?? 'unnamed'}"`
+      `[AgentJob] received job request. jobId="${job?.id ?? 'unknown'}" room="${roomName}" agentName="${job?.agentName ?? 'unnamed'}"`
     );
     console.log('[AgentDiag] entrypoint invoked');
     await ctx.connect();
@@ -105,13 +106,20 @@ export default defineAgent({
       tools: [getCurrentTimeTool, getSystemStatusTool],
     });
 
-    // Assemble turn-taking pipeline with barge-in interruption enabled
+    // Assemble turn-taking pipeline with barge-in interruption & tuned endpointing enabled
     const session = new voice.AgentSession({
       vad,
       stt: createSTT(),
       llm: createLLM(),
       tts: createTTS(),
       turnHandling: {
+        endpointing: {
+          minDelay: worayConfig.turnDetection.minEndpointingDelayMs,
+          maxDelay: worayConfig.turnDetection.maxEndpointingDelayMs,
+        },
+        preemptiveGeneration: {
+          enabled: worayConfig.turnDetection.preemptiveGeneration,
+        },
         interruption: {
           mode: 'vad',
           minDuration: 0.4,
@@ -200,11 +208,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log('[Config] Resolved pipeline (source: apps/voice-backend/woray.config.ts)');
   console.log(JSON.stringify({
     server: worayConfig.server,
-    livekit: { agentName: worayConfig.livekit.agentName, url: secrets.livekit.url },
+    livekit: {
+      agentName: worayConfig.livekit.agentName,
+      numIdleProcesses: worayConfig.livekit.numIdleProcesses,
+      url: secrets.livekit.url,
+    },
+    turnDetection: worayConfig.turnDetection,
     stt: {
       provider: sttCfg.provider,
       model: sttCfg.model,
       language: sttCfg.provider === 'deepgram' ? sttCfg.language : undefined,
+      endpointingMs: sttCfg.provider === 'deepgram' ? sttCfg.endpointingMs : undefined,
+      keywords: sttCfg.provider === 'deepgram' ? sttCfg.keywords : undefined,
     },
     llm: {
       provider: llmCfg.provider,
@@ -218,15 +233,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       voice: ttsCfg.provider === 'deepgram' ? ttsCfg.voice : undefined,
       model: ttsCfg.provider !== 'deepgram' ? ttsCfg.model : undefined,
       sampleRate: ttsCfg.provider === 'deepgram' ? ttsCfg.sampleRate : undefined,
+      speed: ttsCfg.provider === 'deepgram' ? ttsCfg.speed : undefined,
+      expressivity: ttsCfg.provider === 'deepgram' ? ttsCfg.expressivity : undefined,
     },
     prompts: { greeting: prompts.greeting, systemLength: prompts.system.length },
   }, null, 2));
 
-  console.log(`[AgentJob] registering worker with agentName="" (auto-dispatch)`);
+  console.log(
+    `[AgentJob] registering worker with agentName="" (auto-dispatch, numIdleProcesses=${worayConfig.livekit.numIdleProcesses ?? 1})`
+  );
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),
       agentName: '',
+      numIdleProcesses: worayConfig.livekit.numIdleProcesses ?? 1,
       wsURL: secrets.livekit.url,
       apiKey: secrets.livekit.apiKey,
       apiSecret: secrets.livekit.apiSecret,

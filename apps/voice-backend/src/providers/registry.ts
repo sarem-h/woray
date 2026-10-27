@@ -30,6 +30,7 @@ export function createSTT(): stt.STT {
         smartFormat: cfg.smartFormat,
         endpointing: cfg.endpointingMs,
         apiKey: secrets.deepgram.apiKey,
+        keywords: cfg.keywords ? (cfg.keywords as [string, number][]) : undefined,
       });
 
     case 'openai':

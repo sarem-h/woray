@@ -6,6 +6,7 @@ export type STTConfig =
       interimResults: boolean;
       smartFormat: boolean;
       endpointingMs: number;
+      keywords?: readonly (readonly [string, number])[];
     }
   | {
       provider: 'openai';
@@ -57,13 +58,21 @@ export type TTSConfig =
       voice: string;
     };
 
+export interface TurnDetectionConfig {
+  readonly minEndpointingDelayMs: number;
+  readonly maxEndpointingDelayMs: number;
+  readonly preemptiveGeneration: boolean;
+}
+
 export interface WorayConfig {
   readonly server: {
     readonly port: number;
   };
   readonly livekit: {
     readonly agentName: string;
+    readonly numIdleProcesses?: number;
   };
+  readonly turnDetection: Readonly<TurnDetectionConfig>;
   readonly stt: Readonly<STTConfig>;
   readonly llm: Readonly<LLMConfig>;
   readonly tts: Readonly<TTSConfig>;

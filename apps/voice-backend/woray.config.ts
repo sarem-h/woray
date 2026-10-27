@@ -7,6 +7,13 @@ export const worayConfig = defineWorayConfig({
 
   livekit: {
     agentName: '',
+    numIdleProcesses: 1,
+  },
+
+  turnDetection: {
+    minEndpointingDelayMs: 250,
+    maxEndpointingDelayMs: 800,
+    preemptiveGeneration: true,
   },
 
   stt: {
@@ -15,7 +22,8 @@ export const worayConfig = defineWorayConfig({
     language: 'en-US',
     interimResults: true,
     smartFormat: true,
-    endpointingMs: 300,
+    endpointingMs: 250,
+    keywords: [['Woray', 5]],
   },
 
   llm: {
