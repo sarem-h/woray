@@ -1,5 +1,6 @@
 import { spawn, execSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
@@ -9,6 +10,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const runtimeConfigPath = path.resolve(rootDir, 'apps', 'ios-client', 'runtime-config.json');
 const agentLogPath = path.resolve(rootDir, 'apps', 'voice-backend', 'agent.log');
+const pidsFilePath = path.resolve(rootDir, '.woray-dev.pids');
 
 // Truncate agent.log on startup ({ flags: 'w' }) so each run captures a fresh, complete
 // diagnostic trace of the LiveKit agent worker. Raw chunks are piped byte-for-byte below.
@@ -58,7 +60,8 @@ function cleanup() {
   );
 
   Promise.all(kills).finally(() => {
-    // Close the agent diagnostic log stream cleanly on shutdown.
+    // Remove the PID tracking file, then close the agent diagnostic log stream cleanly.
+    removePidsFile();
     try {
       agentLogStream.end();
     } catch {
@@ -82,28 +85,142 @@ process.on('exit', () => {
 });
 
 /**
- * Free up any stale process holding onto a required port on Windows.
- * Async so both ports can be freed concurrently via Promise.all.
+ * Writes the set of currently-tracked child PIDs to .woray-dev.pids (repo root).
  */
-async function freeStalePort(port) {
-  if (process.platform !== 'win32') return;
+function writePidsFile() {
+  const pids = [backendProc, agentProc, tunnel3001Proc, tunnel8081Proc, expoProc]
+    .filter((p) => p && p.pid)
+    .map((p) => p.pid);
   try {
-    const output = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, {
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-    const lines = output.trim().split(/\r?\n/);
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      const pid = parts[parts.length - 1];
-      if (pid && !isNaN(Number(pid)) && Number(pid) !== process.pid) {
-        console.log(`[Woray] Freeing stale process (${pid}) on port ${port}...`);
-        execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
-      }
+    fs.writeFileSync(pidsFilePath, JSON.stringify({ pids, updatedAt: new Date().toISOString() }, null, 2), 'utf-8');
+  } catch {
+    // Non-fatal: PID file is a best-effort recovery mechanism
+  }
+}
+
+/**
+ * Removes the .woray-dev.pids tracking file (called on clean shutdown).
+ */
+function removePidsFile() {
+  try {
+    if (fs.existsSync(pidsFilePath)) fs.unlinkSync(pidsFilePath);
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Kills a single PID tree (Windows taskkill /T /F), ignoring errors if already dead.
+ */
+function killPidTree(pid) {
+  if (!pid || isNaN(Number(pid)) || Number(pid) === process.pid) return;
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+    } else {
+      process.kill(pid, 'SIGKILL');
     }
   } catch {
-    // Port is already free
+    // Already dead
   }
+}
+
+/**
+ * Kills every PID recorded in a previous run's .woray-dev.pids file.
+ */
+function killPidsFromFile() {
+  try {
+    if (!fs.existsSync(pidsFilePath)) return;
+    const data = JSON.parse(fs.readFileSync(pidsFilePath, 'utf-8'));
+    const pids = Array.isArray(data?.pids) ? data.pids : [];
+    if (pids.length > 0) {
+      console.log(`[Woray] Killing ${pids.length} stale PID(s) from previous .woray-dev.pids run...`);
+      for (const pid of pids) killPidTree(pid);
+    }
+  } catch {
+    // Corrupt/unreadable PID file — proceed anyway
+  }
+}
+
+/**
+ * Uses PowerShell's Get-NetTCPConnection to find and force-kill any process listening
+ * on ports 3001 or 8081, plus any orphaned `src/agent.ts` node worker processes.
+ */
+function killProcessesOnPortsAndOrphans() {
+  if (process.platform !== 'win32') return;
+
+  const killListeners =
+    'Get-NetTCPConnection -LocalPort 3001,8081 -State Listen -ErrorAction SilentlyContinue | ' +
+    'Select-Object -ExpandProperty OwningProcess -Unique | ' +
+    'ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }';
+
+  const killOrphanAgents =
+    "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | " +
+    "Where-Object { $_.CommandLine -match 'src/agent\\.ts' } | " +
+    'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
+
+  for (const cmd of [killListeners, killOrphanAgents]) {
+    try {
+      execSync(`powershell -NoProfile -Command "${cmd}"`, { stdio: 'ignore' });
+    } catch {
+      // No matching processes — ports already free / no orphans
+    }
+  }
+}
+
+/**
+ * Verifies a TCP port is fully released by the OS kernel by attempting to bind to it.
+ * Retries every 150ms (up to `timeoutMs`) until binding succeeds. Resolves once the
+ * test server binds + closes cleanly (proving the port is genuinely free).
+ */
+function waitForPortFree(port, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+
+  const tryBind = () =>
+    new Promise((resolve, reject) => {
+      const tester = net.createServer();
+      tester.unref();
+      tester.once('error', (err) => {
+        try { tester.close(); } catch { /* ignore */ }
+        reject(err);
+      });
+      tester.once('listening', () => {
+        tester.close(() => resolve(true));
+      });
+      tester.listen({ host: '0.0.0.0', port });
+    });
+
+  return (async () => {
+    for (;;) {
+      try {
+        await tryBind();
+        return true;
+      } catch (err) {
+        if (Date.now() >= deadline) {
+          throw new Error(`Port ${port} did not become free within ${timeoutMs}ms (${err?.code ?? err})`);
+        }
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+  })();
+}
+
+/**
+ * Ensures a completely clean slate before spawning any dev processes:
+ * 1. Kills PIDs recorded in a previous .woray-dev.pids run.
+ * 2. Kills any process listening on 3001/8081 and orphaned agent.ts workers.
+ * 3. Blocks until the OS kernel has fully released both ports (verified by binding).
+ */
+async function ensureCleanSlate() {
+  if (process.platform !== 'win32') return;
+
+  console.log('[Woray] Ensuring clean slate: killing stale PIDs, port listeners, and orphaned agents...');
+  killPidsFromFile();
+  killProcessesOnPortsAndOrphans();
+
+  // Mandatory verification: do not proceed until both ports are genuinely free.
+  await Promise.all([waitForPortFree(3001), waitForPortFree(8081)]);
+  console.log('[Woray] Ports 3001 and 8081 verified free.');
 }
 
 const TUNNEL_URL_REGEX = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/i;
@@ -115,7 +232,8 @@ function startTunnel(name, localPort) {
   return new Promise((resolve, reject) => {
     console.log(`[Tunnel] Starting Cloudflare Tunnel for ${name} (port ${localPort})...`);
 
-    const proc = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${localPort}`], {
+    // DEP0190 fix: single combined command string with shell:true (no args array).
+    const proc = spawn(`cloudflared tunnel --url http://localhost:${localPort}`, {
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -165,12 +283,15 @@ async function main() {
   console.log('⚡ Starting Woray Full-Stack Development Environment');
   console.log('========================================================');
 
-  // Step 0 (t=0ms): Free up stale ports concurrently.
-  await Promise.all([freeStalePort(3001), freeStalePort(8081)]);
+  // Step 0 (t=0ms): Ensure a completely clean slate — kill stale PIDs from any prior run,
+  // kill anything still listening on 3001/8081 plus orphaned agent.ts workers, then BLOCK
+  // until the OS kernel has verifiably released both ports before spawning anything.
+  await ensureCleanSlate();
 
-  // Step 1: Spawn Voice Backend (:3001) in background
+  // Step 1: Spawn Voice Backend (:3001) in background.
+  // DEP0190 fix: single combined command string with shell:true (no args array).
   console.log('[Backend] Spawning voice-backend server on :3001...');
-  backendProc = spawn('npm', ['--workspace=apps/voice-backend', 'run', 'dev'], {
+  backendProc = spawn('npm --workspace=apps/voice-backend run dev', {
     cwd: rootDir,
     shell: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -198,9 +319,10 @@ async function main() {
     console.error('[Backend] Process spawn error:', err);
   });
 
-  // Step 1B: Spawn LiveKit Agent Worker in background
+  // Step 1B: Spawn LiveKit Agent Worker in background (teeing raw output to agent.log).
+  // DEP0190 fix: single combined command string with shell:true (no args array).
   console.log('[Agent] Spawning LiveKit Agent Worker (npx tsx src/agent.ts dev)...');
-  agentProc = spawn('npx', ['tsx', 'src/agent.ts', 'dev'], {
+  agentProc = spawn('npx tsx src/agent.ts dev', {
     cwd: path.resolve(rootDir, 'apps', 'voice-backend'),
     shell: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -298,8 +420,9 @@ async function main() {
     // Mute non-error backend logs so Expo interactive UI stays pristine
     expoStarted = true;
 
-    // Step 4: Launch Interactive Expo Dev Server with inherited stdio
-    expoProc = spawn('npx', ['expo', 'start', '--dev-client'], {
+    // Step 4: Launch Interactive Expo Dev Server with inherited stdio on port 8081.
+    // DEP0190 fix: single combined command string with shell:true (no args array).
+    expoProc = spawn('npx expo start --dev-client --port 8081', {
       cwd: path.resolve(rootDir, 'apps', 'ios-client'),
       stdio: 'inherit',
       shell: true,
@@ -308,6 +431,9 @@ async function main() {
         EXPO_PACKAGER_PROXY_URL: metroTunnelUrl,
       },
     });
+
+    // Persist all spawned PIDs for next-run clean-slate recovery.
+    writePidsFile();
 
     expoProc.on('close', (code) => {
       cleanup();
