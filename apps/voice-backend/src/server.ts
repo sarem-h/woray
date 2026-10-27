@@ -3,7 +3,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
-import { AccessToken, RoomConfiguration, RoomAgentDispatch } from 'livekit-server-sdk';
+import { AccessToken, AgentDispatchClient } from 'livekit-server-sdk';
 
 dotenv.config();
 
@@ -11,6 +11,12 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 const LIVEKIT_URL = process.env.LIVEKIT_URL || 'ws://127.0.0.1:7880';
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret';
+
+const dispatchClient = new AgentDispatchClient(
+  LIVEKIT_URL.replace(/^ws(s?):/, 'http$1:'),
+  LIVEKIT_API_KEY,
+  LIVEKIT_API_SECRET
+);
 
 const app = express();
 app.use(cors());
@@ -75,11 +81,17 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
       canPublishData: true,
     });
 
-    at.roomConfig = new RoomConfiguration({
-      agents: [new RoomAgentDispatch({ agentName: process.env.LIVEKIT_AGENT_NAME ?? 'woray-agent' })],
-    });
-
     const token = await at.toJwt();
+
+    const agentName = process.env.LIVEKIT_AGENT_NAME ?? 'woray-agent';
+    try {
+      const dispatch = await dispatchClient.createDispatch(roomName, agentName);
+      console.log(`[Dispatch] Created ${dispatch.id} → ${agentName} @ ${roomName}`);
+    } catch (err: any) {
+      console.error(`[Dispatch] FAILED for ${roomName}:`, err);
+      res.status(500).json({ error: 'Agent dispatch failed', detail: String(err) });
+      return;
+    }
 
     res.json({
       token,
@@ -95,6 +107,21 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
       error: 'Failed to generate LiveKit room token',
       details: err?.message,
     });
+  }
+});
+
+/**
+ * GET /api/debug/dispatch/:roomName
+ * Lists all active agent dispatches for a given room.
+ */
+app.get('/api/debug/dispatch/:roomName', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const roomName = String(req.params.roomName);
+    const dispatches = await dispatchClient.listDispatch(roomName);
+    res.json(dispatches);
+  } catch (err: any) {
+    console.error(`[Dispatch Debug] Failed to list dispatches for ${req.params.roomName}:`, err);
+    res.status(500).json({ error: 'Failed to list dispatches', detail: String(err) });
   }
 });
 
