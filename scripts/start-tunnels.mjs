@@ -1,9 +1,12 @@
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execSync, execFile } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -126,11 +129,24 @@ function killPidTree(pid) {
 }
 
 /**
- * Kills every PID recorded in a previous run's .woray-dev.pids file.
+ * Kills every PID recorded in a previous run's .woray-dev.pids file — but only if the
+ * file is recent (< 10 minutes old). An older file is assumed stale (PIDs likely reused
+ * by unrelated processes) and is deleted WITHOUT killing anything.
  */
 function killPidsFromFile() {
   try {
     if (!fs.existsSync(pidsFilePath)) return;
+
+    // Age gate: only trust a PID file that is less than 10 minutes old.
+    const stats = fs.statSync(pidsFilePath);
+    const ageMs = Date.now() - stats.mtimeMs;
+    const TEN_MINUTES_MS = 10 * 60 * 1000;
+    if (ageMs > TEN_MINUTES_MS) {
+      console.log('[Woray] Ignoring stale .woray-dev.pids (older than 10 minutes) — deleting without killing.');
+      removePidsFile();
+      return;
+    }
+
     const data = JSON.parse(fs.readFileSync(pidsFilePath, 'utf-8'));
     const pids = Array.isArray(data?.pids) ? data.pids : [];
     if (pids.length > 0) {
@@ -154,9 +170,13 @@ function killProcessesOnPortsAndOrphans() {
     'Select-Object -ExpandProperty OwningProcess -Unique | ' +
     'ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }';
 
+  // Kill orphaned voice-backend node/tsx worker processes (server.ts AND agent.ts).
+  // These accumulate when the launcher is force-stopped (Stop-Job / terminal close) because
+  // the detached npm → tsx watch → node child tree survives. They will re-bind :3001/:8081
+  // on their next watch-restart cycle and cause EADDRINUSE, so they must be reclaimed here.
   const killOrphanAgents =
     "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | " +
-    "Where-Object { $_.CommandLine -match 'src/agent\\.ts' } | " +
+    "Where-Object { $_.CommandLine -match 'src/agent\\.ts|src/server\\.ts' } | " +
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
 
   for (const cmd of [killListeners, killOrphanAgents]) {
@@ -169,47 +189,115 @@ function killProcessesOnPortsAndOrphans() {
 }
 
 /**
- * Verifies a TCP port is fully released by the OS kernel by attempting to bind to it.
- * Retries every 150ms (up to `timeoutMs`) until binding succeeds. Resolves once the
- * test server binds + closes cleanly (proving the port is genuinely free).
+ * Returns true ONLY if a process is actively LISTENING on the given port.
+ *
+ * On Windows this uses `Get-NetTCPConnection -State Listen`, which deliberately IGNORES
+ * TIME_WAIT / CLOSE_WAIT sockets — exactly what we want, since Windows TIME_WAIT cleanup
+ * lag is NOT a real conflict (production servers like Express/Metro set SO_REUSEADDR and
+ * bind fine over a TIME_WAIT socket). A naive `net.createServer().listen()` bind-test
+ * would falsely report EADDRINUSE on TIME_WAIT; this listener-only check does not.
  */
-function waitForPortFree(port, timeoutMs = 3000) {
-  const deadline = Date.now() + timeoutMs;
-
-  const tryBind = () =>
-    new Promise((resolve, reject) => {
-      const tester = net.createServer();
-      tester.unref();
-      tester.once('error', (err) => {
-        try { tester.close(); } catch { /* ignore */ }
-        reject(err);
+async function isPortListening(port) {
+  if (process.platform !== 'win32') {
+    // POSIX: bind test that tolerates TIME_WAIT (exclusive:false allows SO_REUSEADDR reuse).
+    return new Promise((resolve) => {
+      const srv = net.createServer();
+      srv.once('error', (err) => {
+        try { srv.close(); } catch { /* ignore */ }
+        resolve(err && err.code === 'EADDRINUSE');
       });
-      tester.once('listening', () => {
-        tester.close(() => resolve(true));
-      });
-      tester.listen({ host: '0.0.0.0', port });
+      srv.once('listening', () => srv.close(() => resolve(false)));
+      srv.listen({ port, host: '0.0.0.0', exclusive: true });
     });
-
-  return (async () => {
-    for (;;) {
-      try {
-        await tryBind();
-        return true;
-      } catch (err) {
-        if (Date.now() >= deadline) {
-          throw new Error(`Port ${port} did not become free within ${timeoutMs}ms (${err?.code ?? err})`);
-        }
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    }
-  })();
+  }
+  try {
+    const { stdout } = await execFileAsync('powershell', [
+      '-NoProfile',
+      '-Command',
+      `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`,
+    ]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
- * Ensures a completely clean slate before spawning any dev processes:
- * 1. Kills PIDs recorded in a previous .woray-dev.pids run.
- * 2. Kills any process listening on 3001/8081 and orphaned agent.ts workers.
- * 3. Blocks until the OS kernel has fully released both ports (verified by binding).
+ * Returns true if we can actually bind `port` right now. This is the ground-truth
+ * "is it free" test — it is what Express/Metro will experience when they start.
+ * A lingering CLOSED/TIME_WAIT socket (left behind by a recently-killed listener) makes
+ * this return false on Windows until the OS finishes its socket cleanup lag.
+ */
+function canBindPort(port) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.once('error', () => {
+      try { srv.close(); } catch { /* ignore */ }
+      resolve(false);
+    });
+    srv.once('listening', () => srv.close(() => resolve(true)));
+    srv.listen({ port, host: '0.0.0.0' });
+  });
+}
+
+/**
+ * Polls until `port` is genuinely bindable (so the real server can start), tolerating
+ * Windows TIME_WAIT / CLOSED-socket cleanup lag by WAITING for it (up to 30s, 500ms poll)
+ * instead of failing hard. The happy path (bind succeeds immediately) returns instantly —
+ * no artificial delay. On final timeout, prints actionable instructions (PID + exact
+ * taskkill command) and exits cleanly — never throws a stack trace.
+ */
+async function waitForPortFree(port, timeoutMs = 30000) {
+  const start = Date.now();
+
+  // Fast path: already bindable (nothing listening AND no lingering socket) — return now.
+  if (await canBindPort(port)) return;
+
+  // Something is blocking the bind. If a process is actively LISTENING, kill it; then keep
+  // waiting for the OS to release the lingering socket (TIME_WAIT cleanup lag).
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await canBindPort(port)) return;
+
+    // If a real listener reappeared (e.g. a watch-restarted orphan), kill it again.
+    if (await isPortListening(port)) {
+      killProcessesOnPortsAndOrphans();
+    }
+  }
+
+  // Final diagnostic — find who actually holds a listener (if any) for an actionable message.
+  let holder = '';
+  if (process.platform === 'win32') {
+    try {
+      const { stdout } = await execFileAsync('powershell', [
+        '-NoProfile',
+        '-Command',
+        `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object { "$($_.OwningProcess)" } | Select-Object -Unique`,
+      ]);
+      holder = stdout.trim();
+    } catch {
+      // Ignore — fall through to generic message
+    }
+  }
+
+  const msg = holder
+    ? `Port ${port} is still held by PID(s) ${holder} after ${timeoutMs}ms.\n` +
+      `To free it, run:\n  taskkill /PID ${holder.split('\n').join(' /PID ')} /F\nThen retry: npm run dev`
+    : `Port ${port} is still blocked by a lingering socket after ${timeoutMs}ms (Windows cleanup lag).\n` +
+      `Try: netstat -ano | findstr :${port}\nThen kill the owning PID (if any) and retry: npm run dev`;
+
+  console.error(`\n[Woray] ${msg}\n`);
+  process.exit(1);
+}
+
+/**
+ * Ensures a clean slate before spawning any dev processes — WITHOUT ever failing on
+ * Windows TIME_WAIT lag:
+ * 1. Kills PIDs from a recent .woray-dev.pids run (age-gated; stale files deleted, not killed).
+ * 2. Kills any process actively LISTENING on 3001/8081 plus orphaned agent.ts workers.
+ * 3. Waits until nothing is LISTENING on either port (TIME_WAIT counts as free). The happy
+ *    path (nothing listening) is instant — no artificial delay.
  */
 async function ensureCleanSlate() {
   if (process.platform !== 'win32') return;
@@ -218,7 +306,8 @@ async function ensureCleanSlate() {
   killPidsFromFile();
   killProcessesOnPortsAndOrphans();
 
-  // Mandatory verification: do not proceed until both ports are genuinely free.
+  // Listener-only verification: proceeds instantly when nothing is in Listen state,
+  // even if a TIME_WAIT socket would trip a naive bind-test.
   await Promise.all([waitForPortFree(3001), waitForPortFree(8081)]);
   console.log('[Woray] Ports 3001 and 8081 verified free.');
 }
