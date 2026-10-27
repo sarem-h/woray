@@ -1,5 +1,6 @@
 import { tts } from '@livekit/agents';
 import * as deepgram from '@livekit/agents-plugin-deepgram';
+import { pipelineConfig } from '../config/pipeline.config.js';
 
 /**
  * Truncates text for safe diagnostic logging (previews capped at 80 chars; never logs secrets).
@@ -63,7 +64,7 @@ function wrapStreamInputLogging(stream: any): any {
  */
 export function createDeepgramTTS(
   apiKey: string,
-  voice: string = 'aura-asteria-en'
+  voice: string = pipelineConfig.tts.deepgram.voice
 ): tts.TTS {
   const instance = new deepgram.TTS({
     model: voice,
@@ -114,7 +115,9 @@ export async function testDeepgramTTS(
   apiKey: string,
   text: string = 'Woray online'
 ): Promise<number> {
-  const url = 'https://api.deepgram.com/v1/speak?model=aura-asteria-en&encoding=linear16&sample_rate=24000';
+  const voice = pipelineConfig.tts.deepgram.voice;
+  const sampleRate = pipelineConfig.tts.deepgram.sampleRate;
+  const url = `https://api.deepgram.com/v1/speak?model=${voice}&encoding=linear16&sample_rate=${sampleRate}`;
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -131,7 +134,7 @@ export async function testDeepgramTTS(
     }
 
     console.warn(
-      `[Deepgram TTS Warning] Remote API returned HTTP ${res.status}. Returning synthetic 24kHz PCM test buffer (${24000} bytes) for verification.`
+      `[Deepgram TTS Warning] Remote API returned HTTP ${res.status}. Returning synthetic 24kHz PCM test buffer (${sampleRate} bytes) for verification.`
     );
   } catch (err: any) {
     console.warn(

@@ -3,11 +3,14 @@ import {
   type APIConnectOptions,
   llm,
 } from '@livekit/agents';
+import { pipelineConfig } from '../config/pipeline.config.js';
 
 export interface BedrockLLMOptions {
   modelId?: string;
   region?: string;
   bearerToken?: string;
+  temperature?: number;
+  maxTokens?: number;
 }
 
 /**
@@ -128,6 +131,8 @@ export class BedrockLLMStream extends llm.LLMStream {
   private modelId: string;
   private region: string;
   private bearerToken: string;
+  private temperature: number;
+  private maxTokens: number;
 
   constructor(
     llmInstance: BedrockLLM,
@@ -138,6 +143,8 @@ export class BedrockLLMStream extends llm.LLMStream {
       modelId: string;
       region: string;
       bearerToken: string;
+      temperature: number;
+      maxTokens: number;
     }
   ) {
     super(llmInstance, {
@@ -148,18 +155,27 @@ export class BedrockLLMStream extends llm.LLMStream {
     this.modelId = opts.modelId;
     this.region = opts.region;
     this.bearerToken = opts.bearerToken;
+    this.temperature = opts.temperature;
+    this.maxTokens = opts.maxTokens;
   }
 
   protected async run(): Promise<void> {
     const { system, messages } = formatBedrockMessages(this.chatCtx);
 
-    const payload: any = { messages };
+    const payload: any = {
+      messages,
+      inferenceConfig: {
+        temperature: this.temperature,
+        maxTokens: this.maxTokens,
+      },
+    };
     if (system.length > 0) {
       payload.system = system;
     }
 
+    const cfg = pipelineConfig.llm.bedrock;
     let activeModel = this.modelId;
-    const fallbackModel = 'amazon.nova-lite-v1:0';
+    const fallbackModel = cfg.fallbackModelId;
 
     const sendRequest = async (model: string) => {
       const url = `https://bedrock-runtime.${this.region}.amazonaws.com/model/${encodeURIComponent(model)}/converse-stream`;
@@ -198,7 +214,20 @@ export class BedrockLLMStream extends llm.LLMStream {
       const errText = await res.text().catch(() => '');
 
       if ((status === 404 || status === 400) && activeModel !== fallbackModel) {
-        console.warn(`[BedrockLLM] Model "${activeModel}" returned HTTP ${status}. Falling back to ${fallbackModel}...`);
+        // Primary model failed. Honor allowFallback: crash loudly (false) or warn + fall back (true).
+        if (!cfg.allowFallback) {
+          console.error(`[BedrockDiag] non-200 response body: ${truncate(errText, 300)}`);
+          throw new Error(
+            `[BedrockLLM] Primary model ${cfg.primaryModelId} returned HTTP ${status}. ` +
+            `allowFallback=false (src/config/pipeline.config.ts). ` +
+            `Enable model access in AWS Bedrock console → Model access → region ${cfg.region}, ` +
+            `or set allowFallback: true in config.`
+          );
+        }
+        console.warn(
+          `[BedrockLLM] Primary model failed (${cfg.primaryModelId}) HTTP ${status}. ` +
+          `Falling back to ${cfg.fallbackModelId}.`
+        );
         activeModel = fallbackModel;
         res = await sendRequest(activeModel);
         console.log(
@@ -363,14 +392,17 @@ export class BedrockLLM extends llm.LLM {
 
   constructor(opts?: BedrockLLMOptions) {
     super();
+    const cfg = pipelineConfig.llm.bedrock;
     this.opts = {
-      modelId: opts?.modelId || process.env.BEDROCK_MODEL_ID || 'amazon.nova-lite-v1:0',
-      region: opts?.region || process.env.AWS_REGION || 'us-east-1',
-      bearerToken: opts?.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || '',
+      modelId: opts?.modelId || cfg.primaryModelId,
+      region: opts?.region || cfg.region,
+      bearerToken: opts?.bearerToken || cfg.bearerToken,
+      temperature: opts?.temperature ?? cfg.temperature,
+      maxTokens: opts?.maxTokens ?? cfg.maxTokens,
     };
 
     if (!this.opts.bearerToken) {
-      throw new Error('[BedrockLLM] AWS_BEARER_TOKEN_BEDROCK must be configured in environment or options.');
+      throw new Error('[BedrockLLM] AWS_BEARER_TOKEN_BEDROCK must be configured (see src/config/secrets.ts).');
     }
   }
 
@@ -418,22 +450,31 @@ export class BedrockLLM extends llm.LLM {
       modelId: this.opts.modelId,
       region: this.opts.region,
       bearerToken: this.opts.bearerToken,
+      temperature: this.opts.temperature,
+      maxTokens: this.opts.maxTokens,
     });
   }
 }
 
 /**
- * Diagnostic helper to test Bedrock Bearer Token connectivity
+ * Diagnostic helper to test Bedrock Bearer Token connectivity.
+ * Reads all behavior config from src/config/pipeline.config.ts (secrets come from src/config/secrets.ts).
+ * Honors allowFallback: throws on primary failure when false; falls back when true.
  */
 export async function testBedrockConnection(): Promise<string> {
-  const token = process.env.AWS_BEARER_TOKEN_BEDROCK?.trim();
-  if (!token) throw new Error('AWS_BEARER_TOKEN_BEDROCK is not defined');
-  const region = process.env.AWS_REGION?.trim() || 'us-east-1';
-  const configuredModel = process.env.BEDROCK_MODEL_ID?.trim() || 'amazon.nova-lite-v1:0';
-  const fallbackModel = 'amazon.nova-lite-v1:0';
+  const cfg = pipelineConfig.llm.bedrock;
+  const token = cfg.bearerToken;
+  if (!token) throw new Error('AWS_BEARER_TOKEN_BEDROCK is not defined (see src/config/secrets.ts)');
+  const region = cfg.region;
+  const configuredModel = cfg.primaryModelId;
+  const fallbackModel = cfg.fallbackModelId;
 
   const testPayload = {
     messages: [{ role: 'user', content: [{ text: 'Respond with "Woray online" in two words.' }] }],
+    inferenceConfig: {
+      temperature: cfg.temperature,
+      maxTokens: cfg.maxTokens,
+    },
   };
 
   async function callModel(targetModel: string): Promise<string> {
@@ -450,10 +491,21 @@ export async function testBedrockConnection(): Promise<string> {
     if (!res.ok) {
       const errText = await res.text();
       if ((res.status === 404 || res.status === 400) && targetModel !== fallbackModel) {
-        console.warn(`[BedrockLLM] Model ${targetModel} returned HTTP ${res.status}. Falling back to ${fallbackModel}...`);
+        if (!cfg.allowFallback) {
+          throw new Error(
+            `[BedrockLLM] Primary model ${cfg.primaryModelId} returned HTTP ${res.status}. ` +
+            `allowFallback=false (src/config/pipeline.config.ts). ` +
+            `Enable model access in AWS Bedrock console → Model access → region ${cfg.region}, ` +
+            `or set allowFallback: true in config. Detail: ${truncate(errText, 300)}`
+          );
+        }
+        console.warn(
+          `[BedrockLLM] Primary model failed (${cfg.primaryModelId}) HTTP ${res.status}. ` +
+          `Falling back to ${cfg.fallbackModelId}.`
+        );
         return callModel(fallbackModel);
       }
-      throw new Error(`Bedrock HTTP ${res.status}: ${errText}`);
+      throw new Error(`Bedrock HTTP ${res.status}: ${truncate(errText, 300)}`);
     }
 
     const json: any = await res.json();

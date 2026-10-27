@@ -5,7 +5,7 @@ import * as google from '@livekit/agents-plugin-google';
 import * as cartesia from '@livekit/agents-plugin-cartesia';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 
-import { getPipelineConfig, requireValidKey } from './config.js';
+import { pipelineConfig } from '../config/pipeline.config.js';
 import { BedrockLLM } from './bedrock-llm.js';
 import { createDeepgramTTS } from './deepgram-tts.js';
 
@@ -20,30 +20,28 @@ try {
  * Creates the active Speech-to-Text provider
  */
 export function createSTT(): stt.STT {
-  const cfg = getPipelineConfig();
-
-  switch (cfg.stt) {
+  switch (pipelineConfig.stt.provider) {
     case 'deepgram': {
-      const apiKey = requireValidKey('DEEPGRAM_API_KEY', 'Deepgram STT');
+      const cfg = pipelineConfig.stt.deepgram;
       return new deepgram.STT({
-        model: cfg.deepgramSttModel,
-        interimResults: true,
-        smartFormat: true,
-        endpointing: 300,
-        apiKey,
+        model: cfg.model,
+        interimResults: cfg.interimResults,
+        smartFormat: cfg.smartFormat,
+        endpointing: cfg.endpointingMs,
+        apiKey: cfg.apiKey,
       });
     }
 
     case 'openai': {
-      const apiKey = requireValidKey('OPENAI_API_KEY', 'OpenAI STT');
+      const cfg = pipelineConfig.stt.openai;
       return new openai.STT({
-        model: 'whisper-1',
-        apiKey,
+        model: cfg.model,
+        apiKey: cfg.apiKey,
       });
     }
 
     default:
-      throw new Error(`Unsupported STT provider: "${cfg.stt}"`);
+      throw new Error(`Unsupported STT provider: "${pipelineConfig.stt.provider}"`);
   }
 }
 
@@ -51,37 +49,37 @@ export function createSTT(): stt.STT {
  * Creates the active Large Language Model provider
  */
 export function createLLM(): llm.LLM {
-  const cfg = getPipelineConfig();
-
-  switch (cfg.llm) {
+  switch (pipelineConfig.llm.provider) {
     case 'bedrock': {
-      const bearerToken = requireValidKey('AWS_BEARER_TOKEN_BEDROCK', 'AWS Bedrock LLM');
+      const cfg = pipelineConfig.llm.bedrock;
       return new BedrockLLM({
-        modelId: cfg.bedrockModelId,
-        region: cfg.awsRegion,
-        bearerToken,
+        modelId: cfg.primaryModelId,
+        region: cfg.region,
+        bearerToken: cfg.bearerToken,
+        temperature: cfg.temperature,
+        maxTokens: cfg.maxTokens,
       });
     }
 
     case 'openai': {
-      const apiKey = requireValidKey('OPENAI_API_KEY', 'OpenAI LLM');
+      const cfg = pipelineConfig.llm.openai;
       return new openai.LLM({
-        model: 'gpt-4o-mini',
-        temperature: 0.6,
-        apiKey,
+        model: cfg.model,
+        temperature: cfg.temperature,
+        apiKey: cfg.apiKey,
       });
     }
 
     case 'google': {
-      const apiKey = requireValidKey('GOOGLE_API_KEY', 'Google Gemini LLM');
+      const cfg = pipelineConfig.llm.google;
       return new google.LLM({
-        model: 'gemini-2.0-flash',
-        apiKey,
+        model: cfg.model,
+        apiKey: cfg.apiKey,
       });
     }
 
     default:
-      throw new Error(`Unsupported LLM provider: "${cfg.llm}"`);
+      throw new Error(`Unsupported LLM provider: "${pipelineConfig.llm.provider}"`);
   }
 }
 
@@ -89,42 +87,41 @@ export function createLLM(): llm.LLM {
  * Creates the active Text-to-Speech provider
  */
 export function createTTS(): tts.TTS {
-  const cfg = getPipelineConfig();
-
-  switch (cfg.tts) {
+  switch (pipelineConfig.tts.provider) {
     case 'deepgram': {
-      const apiKey = requireValidKey('DEEPGRAM_API_KEY', 'Deepgram Aura TTS');
-      return createDeepgramTTS(apiKey, cfg.deepgramTtsVoice);
+      const cfg = pipelineConfig.tts.deepgram;
+      return createDeepgramTTS(cfg.apiKey, cfg.voice);
     }
 
     case 'cartesia': {
-      const apiKey = requireValidKey('CARTESIA_API_KEY', 'Cartesia Sonic TTS');
+      const cfg = pipelineConfig.tts.cartesia;
       return new cartesia.TTS({
-        model: 'sonic-english',
-        voice: cfg.cartesiaVoiceId,
-        apiKey,
+        model: cfg.model,
+        voice: cfg.voiceId,
+        apiKey: cfg.apiKey,
       });
     }
 
     case 'elevenlabs': {
-      const apiKey = requireValidKey('ELEVENLABS_API_KEY', 'ElevenLabs Turbo TTS');
+      const cfg = pipelineConfig.tts.elevenlabs;
       return new elevenlabs.TTS({
-        model: 'eleven_turbo_v2_5',
-        apiKey,
+        model: cfg.model,
+        voiceId: cfg.voiceId,
+        apiKey: cfg.apiKey,
       });
     }
 
     case 'openai': {
-      const apiKey = requireValidKey('OPENAI_API_KEY', 'OpenAI TTS');
+      const cfg = pipelineConfig.tts.openai;
       return new openai.TTS({
-        model: 'tts-1',
-        voice: 'alloy',
-        apiKey,
+        model: cfg.model,
+        voice: cfg.voice as any,
+        apiKey: cfg.apiKey,
       });
     }
 
     default:
-      throw new Error(`Unsupported TTS provider: "${cfg.tts}"`);
+      throw new Error(`Unsupported TTS provider: "${pipelineConfig.tts.provider}"`);
   }
 }
 
@@ -132,13 +129,11 @@ export function createTTS(): tts.TTS {
  * Prints a clean ASCII overview of the active pipeline configuration
  */
 export function logActivePipelineSummary(): void {
-  const cfg = getPipelineConfig();
-
   const pad = (str: string, len: number) => (str.length > len ? str.slice(0, len - 3) + '...' : str.padEnd(len));
 
-  const sttDetail = `${cfg.stt} (${cfg.stt === 'deepgram' ? cfg.deepgramSttModel : 'whisper-1'})`;
-  const llmDetail = `${cfg.llm} (${cfg.llm === 'bedrock' ? cfg.bedrockModelId : 'default'})`;
-  const ttsDetail = `${cfg.tts} (${cfg.tts === 'deepgram' ? cfg.deepgramTtsVoice : cfg.tts === 'cartesia' ? 'sonic' : 'default'})`;
+  const sttDetail = `${pipelineConfig.stt.provider} (${pipelineConfig.stt.provider === 'deepgram' ? pipelineConfig.stt.deepgram.model : pipelineConfig.stt.openai.model})`;
+  const llmDetail = `${pipelineConfig.llm.provider} (${pipelineConfig.llm.provider === 'bedrock' ? pipelineConfig.llm.bedrock.primaryModelId : pipelineConfig.llm.provider === 'openai' ? pipelineConfig.llm.openai.model : pipelineConfig.llm.google.model})`;
+  const ttsDetail = `${pipelineConfig.tts.provider} (${pipelineConfig.tts.provider === 'deepgram' ? pipelineConfig.tts.deepgram.voice : pipelineConfig.tts.provider === 'cartesia' ? pipelineConfig.tts.cartesia.model : pipelineConfig.tts.provider === 'elevenlabs' ? pipelineConfig.tts.elevenlabs.model : pipelineConfig.tts.openai.model})`;
 
   console.log('┌────────────────────────────────────────────────────────┐');
   console.log('│          🎙️  WORAY VOICE PIPELINE REGISTRY             │');

@@ -1,16 +1,7 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config();
-
 import { createSTT, createLLM, createTTS, logActivePipelineSummary } from './providers/registry.js';
 import { testBedrockConnection } from './providers/bedrock-llm.js';
 import { testDeepgramTTS } from './providers/deepgram-tts.js';
+import { pipelineConfig } from './config/pipeline.config.js';
 
 async function smokeTest() {
   console.log('--- Step 1: Testing Pipeline Registry Summary ---');
@@ -31,7 +22,7 @@ async function smokeTest() {
   console.log('✅ Bedrock Reply:', bedrockReply.trim());
 
   console.log('\n--- Step 4: Testing Deepgram TTS ---');
-  const ttsBytes = await testDeepgramTTS(process.env.DEEPGRAM_API_KEY || '', 'Woray online');
+  const ttsBytes = await testDeepgramTTS(pipelineConfig.tts.deepgram.apiKey, 'Woray online');
   console.log('✅ Deepgram TTS Bytes:', ttsBytes);
 
   if (ttsBytes > 1000 && bedrockReply.length > 0) {

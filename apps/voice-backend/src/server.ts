@@ -1,21 +1,19 @@
 import http from 'node:http';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AccessToken, AgentDispatchClient } from 'livekit-server-sdk';
+import { pipelineConfig } from './config/pipeline.config.js';
 
-dotenv.config();
-
-const PORT = parseInt(process.env.PORT || '3001', 10);
-const LIVEKIT_URL = process.env.LIVEKIT_URL || 'ws://127.0.0.1:7880';
-const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY || 'devkey';
-const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET || 'secret';
+const PORT = pipelineConfig.server.port;
+const LIVEKIT_URL = pipelineConfig.livekit.url;
+const LIVEKIT_API_KEY = pipelineConfig.livekit.apiKey;
+const LIVEKIT_API_SECRET = pipelineConfig.livekit.apiSecret;
 
 const dispatchClient = new AgentDispatchClient(
-  LIVEKIT_URL.replace(/^ws(s?):/, 'http$1:'),
-  LIVEKIT_API_KEY,
-  LIVEKIT_API_SECRET
+  pipelineConfig.livekit.url.replace(/^ws(s?):/, 'http$1:'),
+  pipelineConfig.livekit.apiKey,
+  pipelineConfig.livekit.apiSecret
 );
 
 const app = express();
@@ -27,7 +25,7 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'healthy',
     uptime: process.uptime(),
-    livekitConfigured: Boolean(process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET),
+    livekitConfigured: Boolean(LIVEKIT_API_KEY && LIVEKIT_API_SECRET),
     livekitUrl: LIVEKIT_URL,
     timestamp: new Date().toISOString(),
   });
@@ -83,7 +81,7 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
 
     const token = await at.toJwt();
 
-    const agentName = process.env.LIVEKIT_AGENT_NAME ?? 'woray-agent';
+    const agentName = pipelineConfig.livekit.agentName;
     try {
       const dispatch = await dispatchClient.createDispatch(roomName, agentName);
       console.log(`[Dispatch] Created ${dispatch.id} → ${agentName} @ ${roomName}`);

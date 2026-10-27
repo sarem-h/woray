@@ -1,11 +1,4 @@
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config();
 import {
   type JobContext,
   type JobProcess,
@@ -29,8 +22,9 @@ import {
   createTTS,
   logActivePipelineSummary,
 } from './providers/registry.js';
-
-dotenv.config();
+import { testBedrockConnection } from './providers/bedrock-llm.js';
+import { pipelineConfig } from './config/pipeline.config.js';
+import { prompts } from './config/prompts.js';
 
 /**
  * Truncates text for safe diagnostic logging (never logs secrets; previews capped at 80 chars).
@@ -66,7 +60,7 @@ const getSystemStatusTool = llm.tool({
       platform: process.platform,
       nodeVersion: process.version,
       memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-      bedrockAvailable: Boolean(process.env.AWS_BEARER_TOKEN_BEDROCK),
+      bedrockAvailable: Boolean(pipelineConfig.llm.bedrock.bearerToken),
     };
   },
 });
@@ -92,11 +86,7 @@ export default defineAgent({
 
     // Define Assistant persona & conversational instructions with functional tools
     const agent = new voice.Agent({
-      instructions: `You are Woray, a fast, proactive, natural conversational voice assistant triggered by the iPhone 17 Action Button.
-Keep spoken responses brief, natural, direct, and under 2-3 sentences.
-Do not use markdown lists, bullet points, asterisks, or formatting that sounds awkward when spoken.
-Silero Voice Activity Detection is actively monitoring user speech: if the user interrupts or starts speaking, you will yield immediately.
-You have access to tools: get_current_time for checking current time or date, and get_system_status for reporting assistant health and status.`,
+      instructions: prompts.agentInstructions,
       tools: [getCurrentTimeTool, getSystemStatusTool],
     });
 
@@ -173,7 +163,7 @@ You have access to tools: get_current_time for checking current time or date, an
     console.log('[Woray Agent] Agent session started and listening in room');
 
     // Announce availability immediately upon connection
-    const greetingText = 'Woray online. Go ahead.';
+    const greetingText = prompts.greeting;
     console.log(`[AgentDiag] greeting dispatch via session.say(), text="${preview(greetingText)}"`);
     try {
       session.say(greetingText, { allowInterruptions: true });
@@ -187,13 +177,50 @@ You have access to tools: get_current_time for checking current time or date, an
 
 // Worker entrypoint execution via LiveKit CLI runner
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // STEP 6 — Startup config print (visible behavior config; excludes secrets).
+  console.log('[Config] Resolved pipeline (source: src/config/pipeline.config.ts)');
+  console.log(JSON.stringify({
+    server: pipelineConfig.server,
+    livekit: { agentName: pipelineConfig.livekit.agentName, url: pipelineConfig.livekit.url },
+    stt: { provider: pipelineConfig.stt.provider, model: pipelineConfig.stt.deepgram.model, language: pipelineConfig.stt.deepgram.language },
+    llm: {
+      provider: pipelineConfig.llm.provider,
+      region: pipelineConfig.llm.bedrock.region,
+      primaryModelId: pipelineConfig.llm.bedrock.primaryModelId,
+      fallbackModelId: pipelineConfig.llm.bedrock.fallbackModelId,
+      allowFallback: pipelineConfig.llm.bedrock.allowFallback,
+      temperature: pipelineConfig.llm.bedrock.temperature,
+      maxTokens: pipelineConfig.llm.bedrock.maxTokens,
+    },
+    tts: { provider: pipelineConfig.tts.provider, voice: pipelineConfig.tts.deepgram.voice, sampleRate: pipelineConfig.tts.deepgram.sampleRate },
+    prompts: { greeting: prompts.greeting, agentInstructionsLength: prompts.agentInstructions.length },
+  }, null, 2));
+
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),
-      agentName: process.env.LIVEKIT_AGENT_NAME ?? 'woray-agent',
-      wsURL: process.env.LIVEKIT_URL,
-      apiKey: process.env.LIVEKIT_API_KEY,
-      apiSecret: process.env.LIVEKIT_API_SECRET,
+      agentName: pipelineConfig.livekit.agentName,
+      wsURL: pipelineConfig.livekit.url,
+      apiKey: pipelineConfig.livekit.apiKey,
+      apiSecret: pipelineConfig.livekit.apiSecret,
     })
   );
+
+  // STEP 7 — Startup Bedrock healthcheck (non-blocking; worker registers first).
+  (async () => {
+    try {
+      await testBedrockConnection();
+      console.log(`[Healthcheck] Bedrock OK: ${pipelineConfig.llm.bedrock.primaryModelId} (${pipelineConfig.llm.bedrock.region})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!pipelineConfig.llm.bedrock.allowFallback) {
+        console.error(`[Healthcheck] FATAL Bedrock primary unreachable: ${pipelineConfig.llm.bedrock.primaryModelId}`);
+        console.error(`[Healthcheck] ${msg}`);
+        console.error(`[Healthcheck] Fix AWS Bedrock model access (region ${pipelineConfig.llm.bedrock.region}) OR set allowFallback: true in src/config/pipeline.config.ts.`);
+        process.exit(1);
+      }
+      console.warn(`[Healthcheck] ⚠ Bedrock primary failed: ${msg}`);
+      console.warn(`[Healthcheck] ⚠ Falling back per turn to ${pipelineConfig.llm.bedrock.fallbackModelId}. Dashboard will report 0 tokens for primary.`);
+    }
+  })();
 }
