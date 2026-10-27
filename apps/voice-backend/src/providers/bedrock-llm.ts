@@ -4,6 +4,19 @@ import {
   llm,
 } from '@livekit/agents';
 import { worayConfig } from '../../woray.config.js';
+import { secrets } from '../config/secrets.js';
+
+/**
+ * Narrows worayConfig.llm to the bedrock variant (this module is only used when
+ * provider === 'bedrock'). Throws loudly if misconfigured.
+ */
+function bedrockCfg() {
+  const cfg = worayConfig.llm;
+  if (cfg.provider !== 'bedrock') {
+    throw new Error(`[BedrockLLM] worayConfig.llm.provider is "${cfg.provider}", expected "bedrock".`);
+  }
+  return cfg;
+}
 
 export interface BedrockLLMOptions {
   modelId?: string;
@@ -332,11 +345,11 @@ export class BedrockLLM extends llm.LLM {
 
   constructor(opts?: BedrockLLMOptions) {
     super();
-    const cfg = worayConfig.llm.bedrock;
+    const cfg = bedrockCfg();
     this.opts = {
       modelId: opts?.modelId || cfg.modelId,
       region: opts?.region || cfg.region,
-      bearerToken: opts?.bearerToken || cfg.bearerToken,
+      bearerToken: opts?.bearerToken || secrets.bedrock.bearerToken,
       temperature: opts?.temperature ?? cfg.temperature,
       maxTokens: opts?.maxTokens ?? cfg.maxTokens,
     };
@@ -402,8 +415,8 @@ export class BedrockLLM extends llm.LLM {
  * Throws on any non-200 with status and body snippet.
  */
 export async function testBedrockConnection(): Promise<string> {
-  const cfg = worayConfig.llm.bedrock;
-  const token = cfg.bearerToken;
+  const cfg = bedrockCfg();
+  const token = secrets.bedrock.bearerToken;
   if (!token) throw new Error('AWS_BEARER_TOKEN_BEDROCK is not defined (see src/config/secrets.ts)');
 
   const url = `https://bedrock-runtime.${cfg.region}.amazonaws.com/model/${encodeURIComponent(cfg.modelId)}/converse`;

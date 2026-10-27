@@ -4,16 +4,17 @@ import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AccessToken, AgentDispatchClient } from 'livekit-server-sdk';
 import { worayConfig } from '../woray.config.js';
+import { secrets } from './config/secrets.js';
 
 const PORT = worayConfig.server.port;
-const LIVEKIT_URL = worayConfig.livekit.url;
-const LIVEKIT_API_KEY = worayConfig.livekit.apiKey;
-const LIVEKIT_API_SECRET = worayConfig.livekit.apiSecret;
+const LIVEKIT_URL = secrets.livekit.url;
+const LIVEKIT_API_KEY = secrets.livekit.apiKey;
+const LIVEKIT_API_SECRET = secrets.livekit.apiSecret;
 
 const dispatchClient = new AgentDispatchClient(
-  worayConfig.livekit.url.replace(/^ws(s?):/, 'http$1:'),
-  worayConfig.livekit.apiKey,
-  worayConfig.livekit.apiSecret
+  secrets.livekit.url.replace(/^ws(s?):/, 'http$1:'),
+  secrets.livekit.apiKey,
+  secrets.livekit.apiSecret
 );
 
 const app = express();

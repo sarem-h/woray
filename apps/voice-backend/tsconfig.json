@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["woray.config.ts", "src/**/*"]
+  "include": ["woray.config.ts", "prompts.ts", "src/**/*"]
 }

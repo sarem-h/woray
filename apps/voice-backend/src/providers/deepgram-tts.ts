@@ -3,6 +3,18 @@ import * as deepgram from '@livekit/agents-plugin-deepgram';
 import { worayConfig } from '../../woray.config.js';
 
 /**
+ * Narrows worayConfig.tts to the deepgram variant. Throws loudly if a different
+ * TTS provider is active (this module only applies when provider === 'deepgram').
+ */
+function deepgramTtsCfg() {
+  const cfg = worayConfig.tts;
+  if (cfg.provider !== 'deepgram') {
+    throw new Error(`[DeepgramTTS] worayConfig.tts.provider is "${cfg.provider}", expected "deepgram".`);
+  }
+  return cfg;
+}
+
+/**
  * Truncates text for safe diagnostic logging (previews capped at 80 chars; never logs secrets).
  */
 function preview(text: unknown, max = 80): string {
@@ -64,7 +76,7 @@ function wrapStreamInputLogging(stream: any): any {
  */
 export function createDeepgramTTS(
   apiKey: string,
-  voice: string = worayConfig.tts.deepgram.voice
+  voice: string = deepgramTtsCfg().voice
 ): tts.TTS {
   const instance = new deepgram.TTS({
     model: voice,
@@ -115,8 +127,7 @@ export async function testDeepgramTTS(
   apiKey: string,
   text: string = 'Woray online'
 ): Promise<number> {
-  const voice = worayConfig.tts.deepgram.voice;
-  const sampleRate = worayConfig.tts.deepgram.sampleRate;
+  const { voice, sampleRate } = deepgramTtsCfg();
   const url = `https://api.deepgram.com/v1/speak?model=${voice}&encoding=linear16&sample_rate=${sampleRate}`;
   try {
     const res = await fetch(url, {

@@ -24,6 +24,17 @@ import {
 } from './providers/registry.js';
 import { testBedrockConnection } from './providers/bedrock-llm.js';
 import { worayConfig } from '../woray.config.js';
+import { secrets } from './config/secrets.js';
+import { prompts } from '../prompts.js';
+
+/**
+ * Narrows worayConfig.llm to the bedrock variant for startup diagnostics/healthcheck.
+ * Returns null when the active LLM provider is not bedrock.
+ */
+function activeBedrockCfg() {
+  const cfg = worayConfig.llm;
+  return cfg.provider === 'bedrock' ? cfg : null;
+}
 
 /**
  * Truncates text for safe diagnostic logging (never logs secrets; previews capped at 80 chars).
@@ -59,7 +70,7 @@ const getSystemStatusTool = llm.tool({
       platform: process.platform,
       nodeVersion: process.version,
       memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-      bedrockAvailable: Boolean(worayConfig.llm.bedrock.bearerToken),
+      bedrockAvailable: Boolean(secrets.bedrock.bearerToken),
     };
   },
 });
@@ -85,7 +96,7 @@ export default defineAgent({
 
     // Define Assistant persona & conversational instructions with functional tools
     const agent = new voice.Agent({
-      instructions: worayConfig.prompts.agentInstructions,
+      instructions: prompts.system,
       tools: [getCurrentTimeTool, getSystemStatusTool],
     });
 
@@ -162,7 +173,7 @@ export default defineAgent({
     console.log('[Woray Agent] Agent session started and listening in room');
 
     // Announce availability immediately upon connection
-    const greetingText = worayConfig.prompts.greeting;
+    const greetingText = prompts.greeting;
     console.log(`[AgentDiag] greeting dispatch via session.say(), text="${preview(greetingText)}"`);
     try {
       session.say(greetingText, { allowInterruptions: true });
@@ -176,41 +187,59 @@ export default defineAgent({
 
 // Worker entrypoint execution via LiveKit CLI runner
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const sttCfg = worayConfig.stt;
+  const llmCfg = worayConfig.llm;
+  const ttsCfg = worayConfig.tts;
+
   // Startup config print (visible behavior config; excludes secrets).
   console.log('[Config] Resolved pipeline (source: apps/voice-backend/woray.config.ts)');
   console.log(JSON.stringify({
     server: worayConfig.server,
-    livekit: { agentName: worayConfig.livekit.agentName, url: worayConfig.livekit.url },
-    stt: { provider: worayConfig.stt.provider, model: worayConfig.stt.deepgram.model, language: worayConfig.stt.deepgram.language },
-    llm: {
-      provider: worayConfig.llm.provider,
-      region: worayConfig.llm.bedrock.region,
-      modelId: worayConfig.llm.bedrock.modelId,
-      temperature: worayConfig.llm.bedrock.temperature,
-      maxTokens: worayConfig.llm.bedrock.maxTokens,
+    livekit: { agentName: worayConfig.livekit.agentName, url: secrets.livekit.url },
+    stt: {
+      provider: sttCfg.provider,
+      model: sttCfg.model,
+      language: sttCfg.provider === 'deepgram' ? sttCfg.language : undefined,
     },
-    tts: { provider: worayConfig.tts.provider, voice: worayConfig.tts.deepgram.voice, sampleRate: worayConfig.tts.deepgram.sampleRate },
-    prompts: { greeting: worayConfig.prompts.greeting, agentInstructionsLength: worayConfig.prompts.agentInstructions.length },
+    llm: {
+      provider: llmCfg.provider,
+      region: llmCfg.provider === 'bedrock' ? llmCfg.region : undefined,
+      model: llmCfg.provider === 'bedrock' ? llmCfg.modelId : llmCfg.model,
+      temperature: llmCfg.temperature,
+      maxTokens: llmCfg.maxTokens,
+    },
+    tts: {
+      provider: ttsCfg.provider,
+      voice: ttsCfg.provider === 'deepgram' ? ttsCfg.voice : undefined,
+      model: ttsCfg.provider !== 'deepgram' ? ttsCfg.model : undefined,
+      sampleRate: ttsCfg.provider === 'deepgram' ? ttsCfg.sampleRate : undefined,
+    },
+    prompts: { greeting: prompts.greeting, systemLength: prompts.system.length },
   }, null, 2));
 
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),
       agentName: worayConfig.livekit.agentName,
-      wsURL: worayConfig.livekit.url,
-      apiKey: worayConfig.livekit.apiKey,
-      apiSecret: worayConfig.livekit.apiSecret,
+      wsURL: secrets.livekit.url,
+      apiKey: secrets.livekit.apiKey,
+      apiSecret: secrets.livekit.apiSecret,
     })
   );
 
   // Startup Bedrock healthcheck (non-blocking; worker registers first). Fail fast on error.
   (async () => {
+    const bedrockCfg = activeBedrockCfg();
+    if (!bedrockCfg) {
+      console.log(`[Healthcheck] Skipped: active LLM provider is "${worayConfig.llm.provider}", not bedrock.`);
+      return;
+    }
     try {
       await testBedrockConnection();
-      console.log(`[Healthcheck] ✓ Bedrock OK: ${worayConfig.llm.bedrock.modelId} (${worayConfig.llm.bedrock.region})`);
+      console.log(`[Healthcheck] ✓ Bedrock OK: ${bedrockCfg.modelId} (${bedrockCfg.region})`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[Healthcheck] ✗ FATAL: ${worayConfig.llm.bedrock.modelId} failed -> ${msg}. Update llm.bedrock.modelId in apps/voice-backend/woray.config.ts.`);
+      console.error(`[Healthcheck] ✗ FATAL: ${bedrockCfg.modelId} failed -> ${msg}. Update llm.bedrock.modelId in apps/voice-backend/woray.config.ts.`);
       process.exit(1);
     }
   })();

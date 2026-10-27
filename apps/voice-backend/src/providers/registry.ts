@@ -6,6 +6,7 @@ import * as cartesia from '@livekit/agents-plugin-cartesia';
 import * as elevenlabs from '@livekit/agents-plugin-elevenlabs';
 
 import { worayConfig } from '../../woray.config.js';
+import { secrets } from '../config/secrets.js';
 import { BedrockLLM } from './bedrock-llm.js';
 import { createDeepgramTTS } from './deepgram-tts.js';
 
@@ -20,28 +21,25 @@ try {
  * Creates the active Speech-to-Text provider
  */
 export function createSTT(): stt.STT {
-  switch (worayConfig.stt.provider) {
-    case 'deepgram': {
-      const cfg = worayConfig.stt.deepgram;
+  const cfg = worayConfig.stt;
+  switch (cfg.provider) {
+    case 'deepgram':
       return new deepgram.STT({
         model: cfg.model,
         interimResults: cfg.interimResults,
         smartFormat: cfg.smartFormat,
         endpointing: cfg.endpointingMs,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.deepgram.apiKey,
       });
-    }
 
-    case 'openai': {
-      const cfg = worayConfig.stt.openai;
+    case 'openai':
       return new openai.STT({
         model: cfg.model,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.openai.apiKey,
       });
-    }
 
     default:
-      throw new Error(`Unsupported STT provider: "${worayConfig.stt.provider}"`);
+      throw new Error(`Unsupported STT provider: "${(cfg as { provider: string }).provider}"`);
   }
 }
 
@@ -49,37 +47,32 @@ export function createSTT(): stt.STT {
  * Creates the active Large Language Model provider
  */
 export function createLLM(): llm.LLM {
-  switch (worayConfig.llm.provider) {
-    case 'bedrock': {
-      const cfg = worayConfig.llm.bedrock;
+  const cfg = worayConfig.llm;
+  switch (cfg.provider) {
+    case 'bedrock':
       return new BedrockLLM({
         modelId: cfg.modelId,
         region: cfg.region,
-        bearerToken: cfg.bearerToken,
+        bearerToken: secrets.bedrock.bearerToken,
         temperature: cfg.temperature,
         maxTokens: cfg.maxTokens,
       });
-    }
 
-    case 'openai': {
-      const cfg = worayConfig.llm.openai;
+    case 'openai':
       return new openai.LLM({
         model: cfg.model,
         temperature: cfg.temperature,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.openai.apiKey,
       });
-    }
 
-    case 'google': {
-      const cfg = worayConfig.llm.google;
+    case 'google':
       return new google.LLM({
         model: cfg.model,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.google.apiKey,
       });
-    }
 
     default:
-      throw new Error(`Unsupported LLM provider: "${worayConfig.llm.provider}"`);
+      throw new Error(`Unsupported LLM provider: "${(cfg as { provider: string }).provider}"`);
   }
 }
 
@@ -87,41 +80,34 @@ export function createLLM(): llm.LLM {
  * Creates the active Text-to-Speech provider
  */
 export function createTTS(): tts.TTS {
-  switch (worayConfig.tts.provider) {
-    case 'deepgram': {
-      const cfg = worayConfig.tts.deepgram;
-      return createDeepgramTTS(cfg.apiKey, cfg.voice);
-    }
+  const cfg = worayConfig.tts;
+  switch (cfg.provider) {
+    case 'deepgram':
+      return createDeepgramTTS(secrets.deepgram.apiKey, cfg.voice);
 
-    case 'cartesia': {
-      const cfg = worayConfig.tts.cartesia;
+    case 'cartesia':
       return new cartesia.TTS({
         model: cfg.model,
         voice: cfg.voiceId,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.cartesia.apiKey,
       });
-    }
 
-    case 'elevenlabs': {
-      const cfg = worayConfig.tts.elevenlabs;
+    case 'elevenlabs':
       return new elevenlabs.TTS({
         model: cfg.model,
         voiceId: cfg.voiceId,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.elevenlabs.apiKey,
       });
-    }
 
-    case 'openai': {
-      const cfg = worayConfig.tts.openai;
+    case 'openai':
       return new openai.TTS({
         model: cfg.model,
         voice: cfg.voice as any,
-        apiKey: cfg.apiKey,
+        apiKey: secrets.openai.apiKey,
       });
-    }
 
     default:
-      throw new Error(`Unsupported TTS provider: "${worayConfig.tts.provider}"`);
+      throw new Error(`Unsupported TTS provider: "${(cfg as { provider: string }).provider}"`);
   }
 }
 
@@ -131,15 +117,23 @@ export function createTTS(): tts.TTS {
 export function logActivePipelineSummary(): void {
   const pad = (str: string, len: number) => (str.length > len ? str.slice(0, len - 3) + '...' : str.padEnd(len));
 
-  const sttDetail = `${worayConfig.stt.provider} (${worayConfig.stt.provider === 'deepgram' ? worayConfig.stt.deepgram.model : worayConfig.stt.openai.model})`;
-  const llmDetail = `${worayConfig.llm.provider} (${worayConfig.llm.provider === 'bedrock' ? worayConfig.llm.bedrock.modelId : worayConfig.llm.provider === 'openai' ? worayConfig.llm.openai.model : worayConfig.llm.google.model})`;
-  const ttsDetail = `${worayConfig.tts.provider} (${worayConfig.tts.provider === 'deepgram' ? worayConfig.tts.deepgram.voice : worayConfig.tts.provider === 'cartesia' ? worayConfig.tts.cartesia.model : worayConfig.tts.provider === 'elevenlabs' ? worayConfig.tts.elevenlabs.model : worayConfig.tts.openai.model})`;
+  const stt = worayConfig.stt;
+  const llm = worayConfig.llm;
+  const tts = worayConfig.tts;
+
+  const sttModel = stt.provider === 'deepgram' ? stt.model : stt.model;
+  const llmModel = llm.provider === 'bedrock' ? llm.modelId : llm.model;
+  const ttsDetail = tts.provider === 'deepgram' ? tts.voice : tts.provider === 'openai' ? tts.model : tts.model;
+
+  const sttDetailStr = `${stt.provider} (${sttModel})`;
+  const llmDetailStr = `${llm.provider} (${llmModel})`;
+  const ttsDetailStr = `${tts.provider} (${ttsDetail})`;
 
   console.log('┌────────────────────────────────────────────────────────┐');
   console.log('│          🎙️  WORAY VOICE PIPELINE REGISTRY             │');
   console.log('├────────────────────────────────────────────────────────┤');
-  console.log(`│ STT Provider : ${pad(sttDetail, 39)} │`);
-  console.log(`│ LLM Provider : ${pad(llmDetail, 39)} │`);
-  console.log(`│ TTS Provider : ${pad(ttsDetail, 39)} │`);
+  console.log(`│ STT Provider : ${pad(sttDetailStr, 39)} │`);
+  console.log(`│ LLM Provider : ${pad(llmDetailStr, 39)} │`);
+  console.log(`│ TTS Provider : ${pad(ttsDetailStr, 39)} │`);
   console.log('└────────────────────────────────────────────────────────┘');
 }
