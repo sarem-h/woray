@@ -7,6 +7,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 const runtimeConfigPath = path.resolve(rootDir, 'apps', 'ios-client', 'runtime-config.json');
+const agentLogPath = path.resolve(rootDir, 'apps', 'voice-backend', 'agent.log');
+
+// Truncate agent.log on startup ({ flags: 'w' }) so each run captures a fresh, complete
+// diagnostic trace of the LiveKit agent worker. Raw chunks are piped byte-for-byte below.
+const agentLogStream = fs.createWriteStream(agentLogPath, { flags: 'w' });
+agentLogStream.on('error', (err) => {
+  console.error('[Woray] agent.log stream error:', err.message);
+});
 
 let backendProc = null;
 let agentProc = null;
@@ -38,6 +46,13 @@ function cleanup() {
         // Process might have already exited
       }
     }
+  }
+
+  // Close the agent diagnostic log stream cleanly on shutdown.
+  try {
+    agentLogStream.end();
+  } catch {
+    // Stream may already be closed
   }
 }
 
@@ -179,6 +194,14 @@ async function main() {
   });
 
   agentProc.stdout.on('data', (chunk) => {
+    // Always capture full raw agent output to agent.log (byte-for-byte) for diagnostics,
+    // regardless of the terminal console-mute logic below.
+    try {
+      agentLogStream.write(chunk);
+    } catch {
+      // Log stream may be closed during shutdown
+    }
+
     if (!expoStarted) {
       const lines = chunk.toString().trim().split('\n');
       for (const line of lines) {
@@ -190,6 +213,13 @@ async function main() {
   });
 
   agentProc.stderr.on('data', (chunk) => {
+    // Always capture full raw agent stderr to agent.log (byte-for-byte) for diagnostics.
+    try {
+      agentLogStream.write(chunk);
+    } catch {
+      // Log stream may be closed during shutdown
+    }
+
     const text = chunk.toString();
     if (!expoStarted || text.toLowerCase().includes('error')) {
       console.error(`[Agent Error] ${text.trim()}`);
@@ -198,6 +228,15 @@ async function main() {
 
   agentProc.on('error', (err) => {
     console.error('[Agent] Process spawn error:', err);
+  });
+
+  agentProc.on('exit', () => {
+    // Close the agent diagnostic log stream when the worker terminates.
+    try {
+      agentLogStream.end();
+    } catch {
+      // Stream may already be closed
+    }
   });
 
   try {

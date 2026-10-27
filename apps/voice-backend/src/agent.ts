@@ -14,6 +14,13 @@ import {
   defineAgent,
   voice,
   llm,
+  AgentSessionEventTypes,
+  type UserInputTranscribedEvent,
+  type AgentStateChangedEvent,
+  type CloseEvent,
+  type ErrorEvent,
+  type ConversationItemAddedEvent,
+  type SpeechCreatedEvent,
 } from '@livekit/agents';
 import * as silero from '@livekit/agents-plugin-silero';
 import {
@@ -24,6 +31,14 @@ import {
 } from './providers/registry.js';
 
 dotenv.config();
+
+/**
+ * Truncates text for safe diagnostic logging (never logs secrets; previews capped at 80 chars).
+ */
+function preview(text: unknown, max = 80): string {
+  const s = typeof text === 'string' ? text : String(text ?? '');
+  return s.length > max ? `${s.slice(0, max)}…(+${s.length - max} chars)` : s;
+}
 
 /**
  * Built-in Tools for Woray Agent
@@ -69,6 +84,7 @@ export default defineAgent({
   },
 
   entry: async (ctx: JobContext) => {
+    console.log('[AgentDiag] entrypoint invoked');
     await ctx.connect();
     console.log(`[Woray Agent] Joined room: ${ctx.room.name}`);
 
@@ -99,16 +115,73 @@ You have access to tools: get_current_time for checking current time or date, an
       },
     });
 
-    // Start session inside the LiveKit room
-    await session.start({
-      agent,
-      room: ctx.room,
+    // ---- [AgentDiag] session lifecycle & pipeline event listeners (diagnostics only) ----
+    session.on(AgentSessionEventTypes.UserInputTranscribed, (ev: UserInputTranscribedEvent) => {
+      const text = ev?.transcript ?? '';
+      if (text.trim().length === 0) {
+        console.log('[AgentDiag] user transcript EMPTY');
+      }
+      console.log(
+        `[AgentDiag] user transcript event: final=${ev?.isFinal} textLength=${text.length} text="${preview(text)}"`
+      );
     });
+
+    session.on(AgentSessionEventTypes.AgentStateChanged, (ev: AgentStateChangedEvent) => {
+      console.log(`[AgentDiag] agent state -> ${ev?.newState} (from ${ev?.oldState})`);
+    });
+
+    session.on(AgentSessionEventTypes.ConversationItemAdded, (ev: ConversationItemAddedEvent) => {
+      const item: any = (ev as any)?.item;
+      const role = item?.role ?? 'unknown';
+      const text = typeof item?.textContent === 'string' ? item.textContent : (item?.rawTextContent ?? '');
+      console.log(
+        `[AgentDiag] conversation_item_added: role=${role} textLength=${(text ?? '').length} text="${preview(text)}"`
+      );
+    });
+
+    session.on(AgentSessionEventTypes.SpeechCreated, (ev: SpeechCreatedEvent) => {
+      console.log(`[AgentDiag] speech_created: source=${(ev as any)?.source ?? 'unknown'}`);
+    });
+
+    session.on(AgentSessionEventTypes.Error, (ev: ErrorEvent) => {
+      const e: any = (ev as any)?.error;
+      console.error(
+        `[AgentDiag] session error event: type=${e?.type ?? 'unknown'} label=${e?.label ?? ''} message=${preview(e?.error?.message ?? e?.message ?? String(e), 200)} recoverable=${e?.recoverable}`
+      );
+    });
+
+    session.on(AgentSessionEventTypes.Close, (ev: CloseEvent) => {
+      const errObj: any = (ev as any)?.error;
+      console.log(
+        `[AgentDiag] session closed: reason=${(ev as any)?.reason ?? 'unknown'} error=${errObj ? preview(errObj?.error?.message ?? errObj?.message ?? String(errObj), 200) : 'none'}`
+      );
+    });
+    // ---- end [AgentDiag] listeners ----
+
+    // Start session inside the LiveKit room
+    try {
+      await session.start({
+        agent,
+        room: ctx.room,
+      });
+      console.log('[AgentDiag] session started');
+    } catch (err: any) {
+      console.error(`[AgentDiag] session.start() threw: ${err?.message}\n${err?.stack}`);
+      throw err;
+    }
 
     console.log('[Woray Agent] Agent session started and listening in room');
 
     // Announce availability immediately upon connection
-    session.say('Woray online. Go ahead.', { allowInterruptions: true });
+    const greetingText = 'Woray online. Go ahead.';
+    console.log(`[AgentDiag] greeting dispatch via session.say(), text="${preview(greetingText)}"`);
+    try {
+      session.say(greetingText, { allowInterruptions: true });
+      console.log('[AgentDiag] greeting dispatched');
+    } catch (err: any) {
+      console.error(`[AgentDiag] greeting dispatch threw: ${err?.message}\n${err?.stack}`);
+      throw err;
+    }
   },
 });
 
