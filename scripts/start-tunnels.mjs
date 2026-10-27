@@ -2,6 +2,7 @@ import { spawn, execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { performance } from 'node:perf_hooks';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,7 +26,7 @@ let isCleaningUp = false;
 let expoStarted = false;
 
 /**
- * Safely kills all child processes and their process trees on exit.
+ * Safely kills all child processes and their process trees on exit (in parallel).
  */
 function cleanup() {
   if (isCleaningUp) return;
@@ -33,27 +34,37 @@ function cleanup() {
 
   console.log('\n[Woray] Shutting down all processes...');
 
-  const procs = [backendProc, agentProc, tunnel3001Proc, tunnel8081Proc, expoProc];
-  for (const p of procs) {
-    if (p && p.pid) {
-      try {
-        if (process.platform === 'win32') {
-          execSync(`taskkill /pid ${p.pid} /T /F`, { stdio: 'ignore' });
-        } else {
-          p.kill('SIGTERM');
-        }
-      } catch {
-        // Process might have already exited
-      }
-    }
-  }
+  const procs = [backendProc, agentProc, tunnel3001Proc, tunnel8081Proc, expoProc].filter(
+    (p) => p && p.pid
+  );
 
-  // Close the agent diagnostic log stream cleanly on shutdown.
-  try {
-    agentLogStream.end();
-  } catch {
-    // Stream may already be closed
-  }
+  // Kill all child processes concurrently.
+  const kills = procs.map(
+    (p) =>
+      new Promise((resolve) => {
+        try {
+          if (process.platform === 'win32') {
+            const k = spawn('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' });
+            k.on('close', resolve);
+            k.on('error', resolve);
+          } else {
+            p.kill('SIGTERM');
+            resolve();
+          }
+        } catch {
+          resolve(); // Process might have already exited
+        }
+      })
+  );
+
+  Promise.all(kills).finally(() => {
+    // Close the agent diagnostic log stream cleanly on shutdown.
+    try {
+      agentLogStream.end();
+    } catch {
+      // Stream may already be closed
+    }
+  });
 }
 
 process.on('SIGINT', () => {
@@ -72,8 +83,9 @@ process.on('exit', () => {
 
 /**
  * Free up any stale process holding onto a required port on Windows.
+ * Async so both ports can be freed concurrently via Promise.all.
  */
-function freeStalePort(port) {
+async function freeStalePort(port) {
   if (process.platform !== 'win32') return;
   try {
     const output = execSync(`netstat -ano | findstr :${port} | findstr LISTENING`, {
@@ -147,13 +159,14 @@ function startTunnel(name, localPort) {
 }
 
 async function main() {
+  const t0 = performance.now();
+
   console.log('========================================================');
   console.log('⚡ Starting Woray Full-Stack Development Environment');
   console.log('========================================================');
 
-  // Step 0: Free up stale ports if previously occupied
-  freeStalePort(3001);
-  freeStalePort(8081);
+  // Step 0 (t=0ms): Free up stale ports concurrently.
+  await Promise.all([freeStalePort(3001), freeStalePort(8081)]);
 
   // Step 1: Spawn Voice Backend (:3001) in background
   console.log('[Backend] Spawning voice-backend server on :3001...');
@@ -240,29 +253,45 @@ async function main() {
   });
 
   try {
-    // Step 2: Spawn Both Cloudflare Tunnels (:3001 and :8081)
-    const backendTunnel = await startTunnel('voice-backend', 3001);
-    tunnel3001Proc = backendTunnel.proc;
-    console.log(`✅ Backend Tunnel Live: ${backendTunnel.url}`);
+    // Step 2: Launch both Cloudflare Tunnels (:3001 and :8081) CONCURRENTLY via Promise.all.
+    // The voice-backend server (Process A) and LiveKit agent worker (Process B) are already
+    // booting in the background (spawned above, fire-and-forget). Tunnel C (:3001) writes
+    // runtime-config.json as soon as its URL resolves; Tunnel D (:8081) runs in parallel.
+    const startTunnel3001AndWriteConfig = async () => {
+      const backendTunnel = await startTunnel('voice-backend', 3001);
+      tunnel3001Proc = backendTunnel.proc;
+      console.log(`✅ Backend Tunnel Live: ${backendTunnel.url}`);
 
-    // Immediately write backend tunnel URL to apps/ios-client/runtime-config.json
-    const configData = {
-      backendHost: backendTunnel.url,
-      updatedAt: new Date().toISOString(),
+      // Immediately write backend tunnel URL to apps/ios-client/runtime-config.json
+      const configData = {
+        backendHost: backendTunnel.url,
+        updatedAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(runtimeConfigPath, JSON.stringify(configData, null, 2), 'utf-8');
+      console.log(`📁 Injected into apps/ios-client/runtime-config.json`);
+      return backendTunnel.url;
     };
-    fs.writeFileSync(runtimeConfigPath, JSON.stringify(configData, null, 2), 'utf-8');
-    console.log(`📁 Injected into apps/ios-client/runtime-config.json`);
 
-    const metroTunnel = await startTunnel('metro-bundler', 8081);
-    tunnel8081Proc = metroTunnel.proc;
-    console.log(`✅ Metro Bundler Tunnel Live: ${metroTunnel.url}`);
+    const startTunnel8081 = async () => {
+      const metroTunnel = await startTunnel('metro-bundler', 8081);
+      tunnel8081Proc = metroTunnel.proc;
+      console.log(`✅ Metro Bundler Tunnel Live: ${metroTunnel.url}`);
+      return metroTunnel.url;
+    };
 
-    // Step 3: Print Clean Summary Banner
+    const [backendTunnelUrl, metroTunnelUrl] = await Promise.all([
+      startTunnel3001AndWriteConfig(),
+      startTunnel8081(),
+    ]);
+
+    // Step 3: Print Clean Summary Banner with parallel boot timing telemetry.
+    const bootMs = Math.round(performance.now() - t0);
     console.log('\n========================================================');
     console.log('⚡ WORAY STACK READY (ENTERPRISE WI-FI BYPASS ACTIVE)');
     console.log('========================================================');
-    console.log(`📡 Backend Tunnel (3001): ${backendTunnel.url}`);
-    console.log(`📱 Metro Tunnel   (8081): ${metroTunnel.url}`);
+    console.log(`⚡ Parallel stack initialized in ${bootMs}ms`);
+    console.log(`📡 Backend Tunnel (3001): ${backendTunnelUrl}`);
+    console.log(`📱 Metro Tunnel   (8081): ${metroTunnelUrl}`);
     console.log('========================================================');
     console.log('Launching Expo Dev Server with interactive QR code...\n');
 
@@ -276,7 +305,7 @@ async function main() {
       shell: true,
       env: {
         ...process.env,
-        EXPO_PACKAGER_PROXY_URL: metroTunnel.url,
+        EXPO_PACKAGER_PROXY_URL: metroTunnelUrl,
       },
     });
 
