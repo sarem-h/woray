@@ -1,6 +1,20 @@
-import { tts } from '@livekit/agents';
+import {
+  initializeLogger,
+  tts,
+  tokenize,
+  AudioByteStream,
+  shortuuid,
+  type APIConnectOptions,
+} from '@livekit/agents';
 import * as deepgram from '@livekit/agents-plugin-deepgram';
 import { worayConfig } from '../../woray.config.js';
+
+// Ensure LiveKit internal logger is initialized
+try {
+  initializeLogger({ pretty: false });
+} catch {
+  // Ignored if already initialized
+}
 
 /**
  * Narrows worayConfig.tts to the deepgram variant. Throws loudly if a different
@@ -70,22 +84,205 @@ function wrapStreamInputLogging(stream: any): any {
   return stream;
 }
 
+export interface FluxTTSOptions {
+  model: string;
+  sampleRate: number;
+  speed: number;
+  expressivity: number;
+  apiKey: string;
+}
+
 /**
- * Creates an instance of Deepgram Aura TTS using the official LiveKit plugin,
- * instrumented with [TTSDiag] boundary logging (diagnostics only; behavior unchanged).
+ * ChunkedStream implementation for Deepgram Flux TTS via /v2/speak
+ */
+export class FluxChunkedStream extends tts.ChunkedStream {
+  label = 'deepgram.FluxChunkedStream';
+  private opts: FluxTTSOptions;
+  private text: string;
+
+  constructor(
+    ttsInstance: tts.TTS,
+    text: string,
+    opts: FluxTTSOptions,
+    connOptions?: APIConnectOptions,
+    abortSignal?: AbortSignal
+  ) {
+    super(text, ttsInstance, connOptions, abortSignal);
+    this.text = text;
+    this.opts = opts;
+  }
+
+  protected async run(): Promise<void> {
+    if (!this.text || !this.text.trim()) {
+      if (!this.queue.closed) {
+        this.queue.close();
+      }
+      return;
+    }
+
+    const requestId = shortuuid();
+    const bstream = new AudioByteStream(this.opts.sampleRate, 1);
+
+    const url = new URL('https://api.deepgram.com/v2/speak');
+    url.searchParams.set('model', this.opts.model);
+    url.searchParams.set('sample_rate', this.opts.sampleRate.toString());
+    url.searchParams.set('encoding', 'linear16');
+    url.searchParams.set('container', 'none');
+    url.searchParams.set('speed', this.opts.speed.toString());
+    url.searchParams.set('expressivity', this.opts.expressivity.toString());
+
+    try {
+      const res = await fetch(url.toString(), {
+        method: 'POST',
+        headers: {
+          Authorization: `Token ${this.opts.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: this.text }),
+        signal: this.abortSignal,
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Deepgram Flux TTS failed (HTTP ${res.status}): ${errText}`);
+      }
+
+      if (!res.body) {
+        throw new Error('Deepgram Flux TTS response body was empty');
+      }
+
+      for await (const chunk of res.body as any) {
+        if (this.abortSignal.aborted) break;
+        for (const frame of bstream.write(chunk)) {
+          if (!this.queue.closed) {
+            this.queue.put({
+              requestId,
+              frame,
+              final: false,
+              segmentId: requestId,
+            });
+          }
+        }
+      }
+
+      for (const frame of bstream.flush()) {
+        if (!this.queue.closed) {
+          this.queue.put({
+            requestId,
+            frame,
+            final: false,
+            segmentId: requestId,
+          });
+        }
+      }
+    } catch (err: any) {
+      if (this.abortSignal.aborted) {
+        if (!this.queue.closed) this.queue.close();
+        return;
+      }
+      throw err;
+    } finally {
+      if (!this.queue.closed) {
+        this.queue.close();
+      }
+    }
+  }
+}
+
+/**
+ * Deepgram Flux TTS class using /v2/speak endpoint with streaming sentence tokenization
+ */
+export class DeepgramFluxTTS extends tts.TTS {
+  label = 'deepgram.FluxTTS';
+  private opts: FluxTTSOptions;
+  private adapter: tts.StreamAdapter;
+
+  constructor(opts: FluxTTSOptions) {
+    super(opts.sampleRate, 1, { streaming: true, alignedTranscript: false });
+    this.opts = opts;
+    this.adapter = new tts.StreamAdapter(
+      this,
+      new tokenize.basic.SentenceTokenizer({ minSentenceLength: 8 })
+    );
+  }
+
+  get model(): string {
+    return this.opts.model;
+  }
+
+  get provider(): string {
+    return 'Deepgram';
+  }
+
+  get sampleRate(): number {
+    return this.opts.sampleRate;
+  }
+
+  synthesize(
+    text: string,
+    connOptions?: APIConnectOptions,
+    abortSignal?: AbortSignal
+  ): tts.ChunkedStream {
+    return new FluxChunkedStream(this, text, this.opts, connOptions, abortSignal);
+  }
+
+  stream(options?: { connOptions?: APIConnectOptions }): tts.SynthesizeStream {
+    return this.adapter.stream(options);
+  }
+}
+
+export interface CreateDeepgramTTSOptions {
+  voice?: string;
+  sampleRate?: number;
+  speed?: number;
+  expressivity?: number;
+}
+
+/**
+ * Creates an instance of Deepgram TTS.
+ * Automatically selects /v2/speak for flux-* voices, and /v1/speak for aura-* voices.
+ * Instrumented with [TTSDiag] boundary logging.
  */
 export function createDeepgramTTS(
   apiKey: string,
-  voice: string = deepgramTtsCfg().voice
+  voiceOrOpts?: string | CreateDeepgramTTSOptions
 ): tts.TTS {
-  const instance = new deepgram.TTS({
-    model: voice,
-    apiKey,
-  });
+  const cfg = deepgramTtsCfg();
+  const voice =
+    typeof voiceOrOpts === 'string'
+      ? voiceOrOpts
+      : voiceOrOpts?.voice ?? cfg.voice;
+  const sampleRate =
+    typeof voiceOrOpts === 'object' && voiceOrOpts?.sampleRate
+      ? voiceOrOpts.sampleRate
+      : cfg.sampleRate;
+  const speed =
+    typeof voiceOrOpts === 'object' && voiceOrOpts?.speed !== undefined
+      ? voiceOrOpts.speed
+      : cfg.speed ?? 1;
+  const expressivity =
+    typeof voiceOrOpts === 'object' && voiceOrOpts?.expressivity !== undefined
+      ? voiceOrOpts.expressivity
+      : cfg.expressivity ?? 0;
+
+  const isFlux = voice.startsWith('flux-');
+
+  const instance: tts.TTS = isFlux
+    ? new DeepgramFluxTTS({
+        model: voice,
+        sampleRate,
+        speed,
+        expressivity,
+        apiKey,
+      })
+    : new deepgram.TTS({
+        model: voice,
+        apiKey,
+      });
 
   // [TTSDiag] Wrap stream() (streaming synthesis path used by the voice pipeline).
   if (typeof (instance as any).stream === 'function') {
-    const originalStream = (instance as any).stream.bind(instance);
+    const originalStream = instance.stream.bind(instance);
     (instance as any).stream = (...args: any[]) => {
       console.log('[TTSDiag] stream() invoked (streaming synthesis started)');
       try {
@@ -100,7 +297,7 @@ export function createDeepgramTTS(
 
   // [TTSDiag] Wrap synthesize() (chunked/one-shot synthesis path).
   if (typeof (instance as any).synthesize === 'function') {
-    const originalSynthesize = (instance as any).synthesize.bind(instance);
+    const originalSynthesize = instance.synthesize.bind(instance);
     (instance as any).synthesize = (text: string, ...rest: any[]) => {
       const len = text?.length ?? 0;
       if (len === 0) {
@@ -127,8 +324,16 @@ export async function testDeepgramTTS(
   apiKey: string,
   text: string = 'Woray online'
 ): Promise<number> {
-  const { voice, sampleRate } = deepgramTtsCfg();
-  const url = `https://api.deepgram.com/v1/speak?model=${voice}&encoding=linear16&sample_rate=${sampleRate}`;
+  const cfg = deepgramTtsCfg();
+  const { voice, sampleRate } = cfg;
+  const isFlux = voice.startsWith('flux-');
+  const speed = cfg.speed ?? 1;
+  const expressivity = cfg.expressivity ?? 0;
+
+  const url = isFlux
+    ? `https://api.deepgram.com/v2/speak?model=${encodeURIComponent(voice)}&speed=${speed}&expressivity=${expressivity}&encoding=linear16&sample_rate=${sampleRate}&container=none`
+    : `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(voice)}&encoding=linear16&sample_rate=${sampleRate}`;
+
   try {
     const res = await fetch(url, {
       method: 'POST',

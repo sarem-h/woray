@@ -38,6 +38,8 @@ export type TTSConfig =
       provider: 'deepgram';
       voice: string;
       sampleRate: number;
+      speed?: number;        // 0.5 to 1.5 (Flux /v2/speak parameter, default 1)
+      expressivity?: number; // -2 to 2 (Flux /v2/speak parameter, default 0)
     }
   | {
       provider: 'cartesia';
