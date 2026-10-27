@@ -2,7 +2,7 @@ import http from 'node:http';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
-import { AccessToken, AgentDispatchClient } from 'livekit-server-sdk';
+import { AccessToken } from 'livekit-server-sdk';
 import { worayConfig } from '../woray.config.js';
 import { secrets } from './config/secrets.js';
 
@@ -10,42 +10,6 @@ const PORT = worayConfig.server.port;
 const LIVEKIT_URL = secrets.livekit.url;
 const LIVEKIT_API_KEY = secrets.livekit.apiKey;
 const LIVEKIT_API_SECRET = secrets.livekit.apiSecret;
-
-const dispatchClient = new AgentDispatchClient(
-  secrets.livekit.url.replace(/^ws(s?):/, 'http$1:'),
-  secrets.livekit.apiKey,
-  secrets.livekit.apiSecret
-);
-
-/**
- * LiveKit Cloud's dispatch API occasionally fails transiently with 5xx.
- * Retry up to `maxAttempts` times with linear 500ms backoff.
- */
-async function createDispatchWithRetry(
-  client: AgentDispatchClient,
-  roomName: string,
-  agentName: string,
-  maxAttempts = 3
-) {
-  let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const dispatch = await client.createDispatch(roomName, agentName);
-      console.log(`[Dispatch] ✓ attempt ${attempt} id=${dispatch.id} agentName="${dispatch.agentName}"`);
-      return dispatch;
-    } catch (err) {
-      lastErr = err;
-      console.warn(
-        `[Dispatch] attempt ${attempt}/${maxAttempts} failed:`,
-        err instanceof Error ? err.message : err
-      );
-      if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 500 * attempt));
-      }
-    }
-  }
-  throw lastErr;
-}
 
 const app = express();
 app.use(cors());
@@ -66,6 +30,8 @@ app.get('/health', (_req: Request, res: Response) => {
  * POST /api/session/token
  * Generates an authorized LiveKit AccessToken for real-time voice streaming.
  * Supports dynamic room and identity isolation when omitted or set to 'auto'.
+ * The agent worker uses auto-dispatch (agentName: ''), so LiveKit dispatches
+ * the agent to the room automatically upon room creation.
  */
 app.post('/api/session/token', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -112,21 +78,8 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
 
     const token = await at.toJwt();
 
-    const agentName = worayConfig.livekit.agentName;
-    console.log(`[Dispatch] agentName="${agentName}" room="${roomName}"`);
-    try {
-      const dispatch = await createDispatchWithRetry(dispatchClient, roomName, agentName);
-      console.log(
-        `[Dispatch] ✓ created id=${dispatch.id} agentName="${dispatch.agentName}" room="${dispatch.room}"`
-      );
-    } catch (err) {
-      console.error(
-        `[Dispatch] ✗ createDispatch FAILED for room="${roomName}" agentName="${agentName}":`,
-        err
-      );
-      res.status(500).json({ error: 'Agent dispatch failed', detail: String(err) });
-      return;
-    }
+    // Auto-dispatch is active (agent worker registers with agentName: '')
+    console.log(`[Dispatch] Issued token for room="${roomName}" (auto-dispatch active)`);
 
     res.json({
       token,
@@ -147,17 +100,14 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
 
 /**
  * GET /api/debug/dispatch/:roomName
- * Lists all active agent dispatches for a given room.
+ * Retained for backwards compatibility / diagnostics (auto-dispatch active).
  */
 app.get('/api/debug/dispatch/:roomName', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const roomName = String(req.params.roomName);
-    const dispatches = await dispatchClient.listDispatch(roomName);
-    res.json(dispatches);
-  } catch (err: any) {
-    console.error(`[Dispatch Debug] Failed to list dispatches for ${req.params.roomName}:`, err);
-    res.status(500).json({ error: 'Failed to list dispatches', detail: String(err) });
-  }
+  res.json({
+    room: req.params.roomName,
+    autoDispatch: true,
+    message: 'Worker uses automatic room dispatch; no manual dispatches tracked.',
+  });
 });
 
 // Create HTTP server instance

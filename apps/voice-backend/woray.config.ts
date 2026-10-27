@@ -6,7 +6,7 @@ export const worayConfig = defineWorayConfig({
   },
 
   livekit: {
-    agentName: 'woray-agent',
+    agentName: '',
   },
 
   stt: {
@@ -21,14 +21,14 @@ export const worayConfig = defineWorayConfig({
   llm: {
     provider: 'bedrock',
     region: 'us-east-1',
-    modelId: 'meta.llama4-scout-17b-instruct-v1:0',
+    modelId: 'us.meta.llama4-scout-17b-instruct-v1:0',
     temperature: 0.6,
     maxTokens: 512,
   },
 
   tts: {
     provider: 'deepgram',
-    voice: 'flux-hannah-en',
+    voice: 'aura-asteria-en',
     sampleRate: 24000,
   },
 });

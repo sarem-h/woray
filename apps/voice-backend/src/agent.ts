@@ -88,6 +88,7 @@ export default defineAgent({
   },
 
   entry: async (ctx: JobContext) => {
+    console.log('[AgentJob] >>> RECEIVED JOB! Joining room:', ctx.room.name);
     const job: any = (ctx as any).job;
     console.log(
       `[AgentJob] received job request. jobId="${job?.id ?? 'unknown'}" room="${job?.room?.name ?? ctx.room?.name ?? 'unknown'}" agentName="${job?.agentName ?? 'unnamed'}"`
@@ -221,11 +222,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     prompts: { greeting: prompts.greeting, systemLength: prompts.system.length },
   }, null, 2));
 
-  console.log(`[AgentJob] registering worker with agentName="${worayConfig.livekit.agentName}"`);
+  console.log(`[AgentJob] registering worker with agentName="" (auto-dispatch)`);
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),
-      agentName: worayConfig.livekit.agentName,
+      agentName: '',
       wsURL: secrets.livekit.url,
       apiKey: secrets.livekit.apiKey,
       apiSecret: secrets.livekit.apiSecret,
