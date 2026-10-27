@@ -3,7 +3,7 @@ import {
   type APIConnectOptions,
   llm,
 } from '@livekit/agents';
-import { pipelineConfig } from '../config/pipeline.config.js';
+import { worayConfig } from '../../woray.config.js';
 
 export interface BedrockLLMOptions {
   modelId?: string;
@@ -173,22 +173,10 @@ export class BedrockLLMStream extends llm.LLMStream {
       payload.system = system;
     }
 
-    const cfg = pipelineConfig.llm.bedrock;
-    let activeModel = this.modelId;
-    const fallbackModel = cfg.fallbackModelId;
+    // Single configured model. Fail hard and loud on any non-2xx.
+    const activeModel = this.modelId;
 
-    const sendRequest = async (model: string) => {
-      const url = `https://bedrock-runtime.${this.region}.amazonaws.com/model/${encodeURIComponent(model)}/converse-stream`;
-      return fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.bearerToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: this.abortController.signal,
-      });
-    };
+    const url = `https://bedrock-runtime.${this.region}.amazonaws.com/model/${encodeURIComponent(activeModel)}/converse-stream`;
 
     // [BedrockDiag] endpoint identification (path + protocol only; no query string, no headers).
     console.log(
@@ -197,7 +185,15 @@ export class BedrockLLMStream extends llm.LLMStream {
 
     let res: Response;
     try {
-      res = await sendRequest(activeModel);
+      res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.bearerToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+        signal: this.abortController.signal,
+      });
     } catch (err: any) {
       if (this.abortController.signal.aborted) return;
       console.error(`[BedrockDiag] stream threw: ${err?.message}\n${err?.stack}`);
@@ -211,67 +207,11 @@ export class BedrockLLMStream extends llm.LLMStream {
 
     if (!res.ok) {
       const status = res.status;
-      const errText = await res.text().catch(() => '');
-
-      if ((status === 404 || status === 400) && activeModel !== fallbackModel) {
-        // Primary model failed. Honor allowFallback: crash loudly (false) or warn + fall back (true).
-        if (!cfg.allowFallback) {
-          console.error(`[BedrockDiag] non-200 response body: ${truncate(errText, 300)}`);
-          throw new Error(
-            `[BedrockLLM] Primary model ${cfg.primaryModelId} returned HTTP ${status}. ` +
-            `allowFallback=false (src/config/pipeline.config.ts). ` +
-            `Enable model access in AWS Bedrock console → Model access → region ${cfg.region}, ` +
-            `or set allowFallback: true in config.`
-          );
-        }
-        console.warn(
-          `[BedrockLLM] Primary model failed (${cfg.primaryModelId}) HTTP ${status}. ` +
-          `Falling back to ${cfg.fallbackModelId}.`
-        );
-        activeModel = fallbackModel;
-        res = await sendRequest(activeModel);
-        console.log(
-          `[BedrockDiag] http status=${res.status} contentType=${res.headers.get('content-type') ?? 'unknown'} (fallback model)`
-        );
-        if (!res.ok) {
-          const fbErr = await res.text().catch(() => '');
-          console.error(`[BedrockDiag] non-200 response body: ${truncate(fbErr, 300)}`);
-          throw new Error(`Bedrock ConverseStream error (${res.status}): ${truncate(fbErr, 300)}`);
-        }
-      } else {
-        // Fallback to non-streaming /converse endpoint
-        const nonStreamUrl = `https://bedrock-runtime.${this.region}.amazonaws.com/model/${encodeURIComponent(activeModel)}/converse`;
-        console.log(`[BedrockDiag] endpoint=/model/${activeModel}/converse protocol=converse (non-streaming fallback)`);
-        const fallbackRes = await fetch(nonStreamUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${this.bearerToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-          signal: this.abortController.signal,
-        });
-
-        if (fallbackRes.ok) {
-          const json: any = await fallbackRes.json();
-          const text = json.output?.message?.content?.[0]?.text;
-          if (text) {
-            const chunkId = `bedrock-${Date.now()}`;
-            this.queue.put({
-              id: chunkId,
-              delta: { role: 'assistant', content: text },
-            });
-            console.log(`[BedrockDiag] chunk #1 type=delta textDeltaLength=${text.length} (non-streaming)`);
-            console.log(`[BedrockDiag] stream iterator exhausted after 1 chunks, totalTextLength=${text.length} (non-streaming)`);
-          } else {
-            console.log('[BedrockDiag] non-streaming fallback produced EMPTY text');
-          }
-          return;
-        }
-
-        console.error(`[BedrockDiag] non-200 response body: ${truncate(errText, 300)}`);
-        throw new Error(`Bedrock HTTP ${status}: ${truncate(errText, 300)}`);
-      }
+      const bodyText = await res.text().catch(() => '');
+      console.error(`[BedrockDiag] non-200 response body: ${truncate(bodyText, 300)}`);
+      throw new Error(
+        `[BedrockLLM] FATAL: model ${activeModel} returned HTTP ${status}. Body: ${truncate(bodyText, 300)}`
+      );
     }
 
     if (!res.body) {
@@ -392,9 +332,9 @@ export class BedrockLLM extends llm.LLM {
 
   constructor(opts?: BedrockLLMOptions) {
     super();
-    const cfg = pipelineConfig.llm.bedrock;
+    const cfg = worayConfig.llm.bedrock;
     this.opts = {
-      modelId: opts?.modelId || cfg.primaryModelId,
+      modelId: opts?.modelId || cfg.modelId,
       region: opts?.region || cfg.region,
       bearerToken: opts?.bearerToken || cfg.bearerToken,
       temperature: opts?.temperature ?? cfg.temperature,
@@ -458,59 +398,34 @@ export class BedrockLLM extends llm.LLM {
 
 /**
  * Diagnostic helper to test Bedrock Bearer Token connectivity.
- * Reads all behavior config from src/config/pipeline.config.ts (secrets come from src/config/secrets.ts).
- * Honors allowFallback: throws on primary failure when false; falls back when true.
+ * Sends a raw non-streaming ping to the single configured model.
+ * Throws on any non-200 with status and body snippet.
  */
 export async function testBedrockConnection(): Promise<string> {
-  const cfg = pipelineConfig.llm.bedrock;
+  const cfg = worayConfig.llm.bedrock;
   const token = cfg.bearerToken;
   if (!token) throw new Error('AWS_BEARER_TOKEN_BEDROCK is not defined (see src/config/secrets.ts)');
-  const region = cfg.region;
-  const configuredModel = cfg.primaryModelId;
-  const fallbackModel = cfg.fallbackModelId;
 
-  const testPayload = {
-    messages: [{ role: 'user', content: [{ text: 'Respond with "Woray online" in two words.' }] }],
-    inferenceConfig: {
-      temperature: cfg.temperature,
-      maxTokens: cfg.maxTokens,
+  const url = `https://bedrock-runtime.${cfg.region}.amazonaws.com/model/${encodeURIComponent(cfg.modelId)}/converse`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
     },
-  };
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: [{ text: 'ping' }] }],
+      inferenceConfig: { maxTokens: 5 },
+    }),
+  });
 
-  async function callModel(targetModel: string): Promise<string> {
-    const url = `https://bedrock-runtime.${region}.amazonaws.com/model/${encodeURIComponent(targetModel)}/converse`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(testPayload),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      if ((res.status === 404 || res.status === 400) && targetModel !== fallbackModel) {
-        if (!cfg.allowFallback) {
-          throw new Error(
-            `[BedrockLLM] Primary model ${cfg.primaryModelId} returned HTTP ${res.status}. ` +
-            `allowFallback=false (src/config/pipeline.config.ts). ` +
-            `Enable model access in AWS Bedrock console → Model access → region ${cfg.region}, ` +
-            `or set allowFallback: true in config. Detail: ${truncate(errText, 300)}`
-          );
-        }
-        console.warn(
-          `[BedrockLLM] Primary model failed (${cfg.primaryModelId}) HTTP ${res.status}. ` +
-          `Falling back to ${cfg.fallbackModelId}.`
-        );
-        return callModel(fallbackModel);
-      }
-      throw new Error(`Bedrock HTTP ${res.status}: ${truncate(errText, 300)}`);
-    }
-
-    const json: any = await res.json();
-    return json.output?.message?.content?.[0]?.text || '';
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => '');
+    throw new Error(
+      `[BedrockLLM] FATAL: model ${cfg.modelId} returned HTTP ${res.status}. Body: ${truncate(bodyText, 300)}`
+    );
   }
 
-  return callModel(configuredModel);
+  const json: any = await res.json();
+  return json.output?.message?.content?.[0]?.text || '';
 }

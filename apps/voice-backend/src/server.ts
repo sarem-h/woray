@@ -3,17 +3,17 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AccessToken, AgentDispatchClient } from 'livekit-server-sdk';
-import { pipelineConfig } from './config/pipeline.config.js';
+import { worayConfig } from '../woray.config.js';
 
-const PORT = pipelineConfig.server.port;
-const LIVEKIT_URL = pipelineConfig.livekit.url;
-const LIVEKIT_API_KEY = pipelineConfig.livekit.apiKey;
-const LIVEKIT_API_SECRET = pipelineConfig.livekit.apiSecret;
+const PORT = worayConfig.server.port;
+const LIVEKIT_URL = worayConfig.livekit.url;
+const LIVEKIT_API_KEY = worayConfig.livekit.apiKey;
+const LIVEKIT_API_SECRET = worayConfig.livekit.apiSecret;
 
 const dispatchClient = new AgentDispatchClient(
-  pipelineConfig.livekit.url.replace(/^ws(s?):/, 'http$1:'),
-  pipelineConfig.livekit.apiKey,
-  pipelineConfig.livekit.apiSecret
+  worayConfig.livekit.url.replace(/^ws(s?):/, 'http$1:'),
+  worayConfig.livekit.apiKey,
+  worayConfig.livekit.apiSecret
 );
 
 const app = express();
@@ -81,7 +81,7 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
 
     const token = await at.toJwt();
 
-    const agentName = pipelineConfig.livekit.agentName;
+    const agentName = worayConfig.livekit.agentName;
     try {
       const dispatch = await dispatchClient.createDispatch(roomName, agentName);
       console.log(`[Dispatch] Created ${dispatch.id} → ${agentName} @ ${roomName}`);

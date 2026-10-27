@@ -1,6 +1,6 @@
 import { tts } from '@livekit/agents';
 import * as deepgram from '@livekit/agents-plugin-deepgram';
-import { pipelineConfig } from '../config/pipeline.config.js';
+import { worayConfig } from '../../woray.config.js';
 
 /**
  * Truncates text for safe diagnostic logging (previews capped at 80 chars; never logs secrets).
@@ -64,7 +64,7 @@ function wrapStreamInputLogging(stream: any): any {
  */
 export function createDeepgramTTS(
   apiKey: string,
-  voice: string = pipelineConfig.tts.deepgram.voice
+  voice: string = worayConfig.tts.deepgram.voice
 ): tts.TTS {
   const instance = new deepgram.TTS({
     model: voice,
@@ -115,8 +115,8 @@ export async function testDeepgramTTS(
   apiKey: string,
   text: string = 'Woray online'
 ): Promise<number> {
-  const voice = pipelineConfig.tts.deepgram.voice;
-  const sampleRate = pipelineConfig.tts.deepgram.sampleRate;
+  const voice = worayConfig.tts.deepgram.voice;
+  const sampleRate = worayConfig.tts.deepgram.sampleRate;
   const url = `https://api.deepgram.com/v1/speak?model=${voice}&encoding=linear16&sample_rate=${sampleRate}`;
   try {
     const res = await fetch(url, {

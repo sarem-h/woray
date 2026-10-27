@@ -23,8 +23,7 @@ import {
   logActivePipelineSummary,
 } from './providers/registry.js';
 import { testBedrockConnection } from './providers/bedrock-llm.js';
-import { pipelineConfig } from './config/pipeline.config.js';
-import { prompts } from './config/prompts.js';
+import { worayConfig } from '../woray.config.js';
 
 /**
  * Truncates text for safe diagnostic logging (never logs secrets; previews capped at 80 chars).
@@ -60,7 +59,7 @@ const getSystemStatusTool = llm.tool({
       platform: process.platform,
       nodeVersion: process.version,
       memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-      bedrockAvailable: Boolean(pipelineConfig.llm.bedrock.bearerToken),
+      bedrockAvailable: Boolean(worayConfig.llm.bedrock.bearerToken),
     };
   },
 });
@@ -86,7 +85,7 @@ export default defineAgent({
 
     // Define Assistant persona & conversational instructions with functional tools
     const agent = new voice.Agent({
-      instructions: prompts.agentInstructions,
+      instructions: worayConfig.prompts.agentInstructions,
       tools: [getCurrentTimeTool, getSystemStatusTool],
     });
 
@@ -163,7 +162,7 @@ export default defineAgent({
     console.log('[Woray Agent] Agent session started and listening in room');
 
     // Announce availability immediately upon connection
-    const greetingText = prompts.greeting;
+    const greetingText = worayConfig.prompts.greeting;
     console.log(`[AgentDiag] greeting dispatch via session.say(), text="${preview(greetingText)}"`);
     try {
       session.say(greetingText, { allowInterruptions: true });
@@ -177,50 +176,42 @@ export default defineAgent({
 
 // Worker entrypoint execution via LiveKit CLI runner
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  // STEP 6 — Startup config print (visible behavior config; excludes secrets).
-  console.log('[Config] Resolved pipeline (source: src/config/pipeline.config.ts)');
+  // Startup config print (visible behavior config; excludes secrets).
+  console.log('[Config] Resolved pipeline (source: apps/voice-backend/woray.config.ts)');
   console.log(JSON.stringify({
-    server: pipelineConfig.server,
-    livekit: { agentName: pipelineConfig.livekit.agentName, url: pipelineConfig.livekit.url },
-    stt: { provider: pipelineConfig.stt.provider, model: pipelineConfig.stt.deepgram.model, language: pipelineConfig.stt.deepgram.language },
+    server: worayConfig.server,
+    livekit: { agentName: worayConfig.livekit.agentName, url: worayConfig.livekit.url },
+    stt: { provider: worayConfig.stt.provider, model: worayConfig.stt.deepgram.model, language: worayConfig.stt.deepgram.language },
     llm: {
-      provider: pipelineConfig.llm.provider,
-      region: pipelineConfig.llm.bedrock.region,
-      primaryModelId: pipelineConfig.llm.bedrock.primaryModelId,
-      fallbackModelId: pipelineConfig.llm.bedrock.fallbackModelId,
-      allowFallback: pipelineConfig.llm.bedrock.allowFallback,
-      temperature: pipelineConfig.llm.bedrock.temperature,
-      maxTokens: pipelineConfig.llm.bedrock.maxTokens,
+      provider: worayConfig.llm.provider,
+      region: worayConfig.llm.bedrock.region,
+      modelId: worayConfig.llm.bedrock.modelId,
+      temperature: worayConfig.llm.bedrock.temperature,
+      maxTokens: worayConfig.llm.bedrock.maxTokens,
     },
-    tts: { provider: pipelineConfig.tts.provider, voice: pipelineConfig.tts.deepgram.voice, sampleRate: pipelineConfig.tts.deepgram.sampleRate },
-    prompts: { greeting: prompts.greeting, agentInstructionsLength: prompts.agentInstructions.length },
+    tts: { provider: worayConfig.tts.provider, voice: worayConfig.tts.deepgram.voice, sampleRate: worayConfig.tts.deepgram.sampleRate },
+    prompts: { greeting: worayConfig.prompts.greeting, agentInstructionsLength: worayConfig.prompts.agentInstructions.length },
   }, null, 2));
 
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),
-      agentName: pipelineConfig.livekit.agentName,
-      wsURL: pipelineConfig.livekit.url,
-      apiKey: pipelineConfig.livekit.apiKey,
-      apiSecret: pipelineConfig.livekit.apiSecret,
+      agentName: worayConfig.livekit.agentName,
+      wsURL: worayConfig.livekit.url,
+      apiKey: worayConfig.livekit.apiKey,
+      apiSecret: worayConfig.livekit.apiSecret,
     })
   );
 
-  // STEP 7 — Startup Bedrock healthcheck (non-blocking; worker registers first).
+  // Startup Bedrock healthcheck (non-blocking; worker registers first). Fail fast on error.
   (async () => {
     try {
       await testBedrockConnection();
-      console.log(`[Healthcheck] Bedrock OK: ${pipelineConfig.llm.bedrock.primaryModelId} (${pipelineConfig.llm.bedrock.region})`);
+      console.log(`[Healthcheck] ✓ Bedrock OK: ${worayConfig.llm.bedrock.modelId} (${worayConfig.llm.bedrock.region})`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!pipelineConfig.llm.bedrock.allowFallback) {
-        console.error(`[Healthcheck] FATAL Bedrock primary unreachable: ${pipelineConfig.llm.bedrock.primaryModelId}`);
-        console.error(`[Healthcheck] ${msg}`);
-        console.error(`[Healthcheck] Fix AWS Bedrock model access (region ${pipelineConfig.llm.bedrock.region}) OR set allowFallback: true in src/config/pipeline.config.ts.`);
-        process.exit(1);
-      }
-      console.warn(`[Healthcheck] ⚠ Bedrock primary failed: ${msg}`);
-      console.warn(`[Healthcheck] ⚠ Falling back per turn to ${pipelineConfig.llm.bedrock.fallbackModelId}. Dashboard will report 0 tokens for primary.`);
+      console.error(`[Healthcheck] ✗ FATAL: ${worayConfig.llm.bedrock.modelId} failed -> ${msg}. Update llm.bedrock.modelId in apps/voice-backend/woray.config.ts.`);
+      process.exit(1);
     }
   })();
 }

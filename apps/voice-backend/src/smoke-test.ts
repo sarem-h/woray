@@ -1,7 +1,7 @@
 import { createSTT, createLLM, createTTS, logActivePipelineSummary } from './providers/registry.js';
 import { testBedrockConnection } from './providers/bedrock-llm.js';
 import { testDeepgramTTS } from './providers/deepgram-tts.js';
-import { pipelineConfig } from './config/pipeline.config.js';
+import { worayConfig } from '../woray.config.js';
 
 async function smokeTest() {
   console.log('--- Step 1: Testing Pipeline Registry Summary ---');
@@ -22,7 +22,7 @@ async function smokeTest() {
   console.log('✅ Bedrock Reply:', bedrockReply.trim());
 
   console.log('\n--- Step 4: Testing Deepgram TTS ---');
-  const ttsBytes = await testDeepgramTTS(pipelineConfig.tts.deepgram.apiKey, 'Woray online');
+  const ttsBytes = await testDeepgramTTS(worayConfig.tts.deepgram.apiKey, 'Woray online');
   console.log('✅ Deepgram TTS Bytes:', ttsBytes);
 
   if (ttsBytes > 1000 && bedrockReply.length > 0) {
