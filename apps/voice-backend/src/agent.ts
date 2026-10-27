@@ -88,6 +88,10 @@ export default defineAgent({
   },
 
   entry: async (ctx: JobContext) => {
+    const job: any = (ctx as any).job;
+    console.log(
+      `[AgentJob] received job request. jobId="${job?.id ?? 'unknown'}" room="${job?.room?.name ?? ctx.room?.name ?? 'unknown'}" agentName="${job?.agentName ?? 'unnamed'}"`
+    );
     console.log('[AgentDiag] entrypoint invoked');
     await ctx.connect();
     console.log(`[Woray Agent] Joined room: ${ctx.room.name}`);
@@ -217,6 +221,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     prompts: { greeting: prompts.greeting, systemLength: prompts.system.length },
   }, null, 2));
 
+  console.log(`[AgentJob] registering worker with agentName="${worayConfig.livekit.agentName}"`);
   cli.runApp(
     new WorkerOptions({
       agent: fileURLToPath(import.meta.url),

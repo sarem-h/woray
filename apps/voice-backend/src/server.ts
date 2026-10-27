@@ -17,6 +17,36 @@ const dispatchClient = new AgentDispatchClient(
   secrets.livekit.apiSecret
 );
 
+/**
+ * LiveKit Cloud's dispatch API occasionally fails transiently with 5xx.
+ * Retry up to `maxAttempts` times with linear 500ms backoff.
+ */
+async function createDispatchWithRetry(
+  client: AgentDispatchClient,
+  roomName: string,
+  agentName: string,
+  maxAttempts = 3
+) {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const dispatch = await client.createDispatch(roomName, agentName);
+      console.log(`[Dispatch] ✓ attempt ${attempt} id=${dispatch.id} agentName="${dispatch.agentName}"`);
+      return dispatch;
+    } catch (err) {
+      lastErr = err;
+      console.warn(
+        `[Dispatch] attempt ${attempt}/${maxAttempts} failed:`,
+        err instanceof Error ? err.message : err
+      );
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -83,11 +113,17 @@ app.post('/api/session/token', async (req: Request, res: Response): Promise<void
     const token = await at.toJwt();
 
     const agentName = worayConfig.livekit.agentName;
+    console.log(`[Dispatch] agentName="${agentName}" room="${roomName}"`);
     try {
-      const dispatch = await dispatchClient.createDispatch(roomName, agentName);
-      console.log(`[Dispatch] Created ${dispatch.id} → ${agentName} @ ${roomName}`);
-    } catch (err: any) {
-      console.error(`[Dispatch] FAILED for ${roomName}:`, err);
+      const dispatch = await createDispatchWithRetry(dispatchClient, roomName, agentName);
+      console.log(
+        `[Dispatch] ✓ created id=${dispatch.id} agentName="${dispatch.agentName}" room="${dispatch.room}"`
+      );
+    } catch (err) {
+      console.error(
+        `[Dispatch] ✗ createDispatch FAILED for room="${roomName}" agentName="${agentName}":`,
+        err
+      );
       res.status(500).json({ error: 'Agent dispatch failed', detail: String(err) });
       return;
     }
