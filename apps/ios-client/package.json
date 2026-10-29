@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~4.0.1",
     "@livekit/react-native": "^3.1.0",
     "@livekit/react-native-expo-plugin": "^1.1.0",
     "@livekit/react-native-webrtc": "^150.1.0",
@@ -27,8 +28,10 @@
     "expo-status-bar": "~2.0.1",
     "livekit-client": "^2.9.2",
     "react": "18.3.1",
+    "react-dom": "18.3.1",
     "react-native": "0.76.7",
-    "react-native-reanimated": "~3.16.1"
+    "react-native-reanimated": "~3.16.1",
+    "react-native-web": "~0.19.13"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
