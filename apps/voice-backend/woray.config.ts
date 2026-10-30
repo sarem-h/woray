@@ -36,7 +36,7 @@ export const worayConfig = defineWorayConfig({
 
   tts: {
     provider: 'deepgram',
-    voice: 'flux-hannah-en',
+    voice: 'aura-2-thalia-en',
     sampleRate: 24000,
     speed: 1,
     expressivity: 0,

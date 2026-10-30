@@ -2,7 +2,7 @@ import AppIntents
 
 /// Registers Woray shortcuts with iOS system services.
 /// Conforming to AppShortcutsProvider makes this shortcut discoverable in
-/// iOS Settings -> Action Button -> Shortcut, Siri, and the Shortcuts app
+/// iOS Settings -> Action Button -> Shortcut and the Shortcuts app
 /// with zero manual configuration required by the end user.
 struct AppShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {

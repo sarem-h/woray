@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",
+    "@expo/vector-icons": "~14.0.4",
     "@livekit/react-native": "^3.1.0",
     "@livekit/react-native-expo-plugin": "^1.1.0",
     "@livekit/react-native-webrtc": "^150.1.0",
@@ -30,6 +31,7 @@
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-native": "0.76.7",
+    "react-native-keyboard-controller": "^1.22.9",
     "react-native-reanimated": "~3.16.1",
     "react-native-web": "~0.19.13"
   },
